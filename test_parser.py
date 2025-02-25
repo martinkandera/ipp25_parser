@@ -109,8 +109,8 @@ def run_param_tests():
     return passed, total
 
 def main():
-    file_passed, file_total = run_file_tests()
     param_passed, param_total = run_param_tests()
+    file_passed, file_total = run_file_tests()
     total_passed = file_passed + param_passed
     total_tests = file_total + param_total
     print("========================================")

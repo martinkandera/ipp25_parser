@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<program language="SOL25">
+<program language="SOL25" description="comment&nbsp;newline">
     <class name="Main" parent="Object">
         <method selector="run">
             <block arity="0" />

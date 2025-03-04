@@ -7,6 +7,12 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 RESET = "\033[0m"
 
+def normalize_xml(xml_str):
+    # Odstráni prázdne riadky a orezáva medzery na začiatkoch a koncoch riadkov.
+    lines = xml_str.strip().splitlines()
+    normalized_lines = [line.strip() for line in lines if line.strip() != ""]
+    return "\n".join(normalized_lines)
+
 def run_file_tests():
     tests_dir = "tests"
     # Vyberieme vsetky subory, ktore maju priponu ".in" a nepatria do parametrov (test0_*)
@@ -56,15 +62,18 @@ def run_file_tests():
             passed += 1
             continue
 
-        if stdout == expected_output:
+        norm_stdout = normalize_xml(stdout)
+        norm_expected = normalize_xml(expected_output)
+
+        if norm_stdout == norm_expected:
             print(f"{GREEN}Test {test_name}: OK{RESET}")
             passed += 1
         else:
             print(f"{RED}Test {test_name}: FAIL (output mismatch){RESET}")
             print("----- Expected output -----")
-            print(expected_output)
+            print(norm_expected)
             print("----- Actual output -----")
-            print(stdout)
+            print(norm_stdout)
             print("-------------------------")
     if total:
         print(f"File tests: {passed}/{total} passed.\n")

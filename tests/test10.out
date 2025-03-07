@@ -4,9 +4,9 @@
         <method selector="run">
             <block arity="0">
                 <assign order="1">
-                    <var name="x" />
+                    <var name="x"/>
                     <expr>
-                        <literal class="Nil" value="nil" />
+                        <literal class="Nil" value="nil"/>
                     </expr>
                 </assign>
             </block>

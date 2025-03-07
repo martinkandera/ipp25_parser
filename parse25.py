@@ -25,7 +25,6 @@ def show_help():
     print("  --help        Vypise tuto napovedu a skonci.")
     sys.exit(ErrorType.NO_ERROR.value)
 
-# Trieda Parser z predchadzajuceho kodu; nezmenena alebo len minimalne zmeny
 class Parser:
     class_header_re = re.compile(r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
     method_header_re = re.compile(r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
@@ -76,15 +75,13 @@ class Parser:
         return self.transform_description(raw_comment)
 
     def transform_description(self, desc):
-        # 1. Zjednotenie reálnych newline a literalnych \n do jedneho symbolu
+        # Zjednotime reálne newlines aj literalne \n do jedneho symbolu
         desc = desc.replace('\n', '\u0001')
         desc = desc.replace(r'\n', '\u0001')
-        # 2. Transformacia skupin
         out = []
         i = 0
         while i < len(desc):
             if desc[i] == '\u0001':
-                # zistime dlzku skupiny
                 start = i
                 while i < len(desc) and desc[i] == '\u0001':
                     i += 1
@@ -121,13 +118,94 @@ class Parser:
         desc = mm.group(2) if mm.group(2) else ""
         return (selector, desc)
 
+    def parse_block_instructions(self, lines_in_block):
+        """
+        Zjednodusene parsuje priradenie vo formate:
+          x := 10.
+        Vracia list instrukcii. Každá inštrukcia je slovnik:
+          { 'type': 'assign',
+            'order': N,
+            'var': 'x',
+            'expr': {'type': 'literal', 'class': 'Integer'/'Nil'/'True'/'False', 'value': '...'} }
+        """
+        instructions = []
+        order = 1
+        assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$")
+        integer_re = re.compile(r"^[+-]?\d+$")
+        for line in lines_in_block:
+            m = assign_re.match(line.strip())
+            if not m:
+                continue
+            var_name = m.group(1)
+            expr_str = m.group(2).strip()
+            if integer_re.match(expr_str):
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "literal",
+                        "class": "Integer",
+                        "value": expr_str
+                    }
+                }
+            elif expr_str == "nil":
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "literal",
+                        "class": "Nil",
+                        "value": "nil"
+                    }
+                }
+            elif expr_str == "true":
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "literal",
+                        "class": "True",
+                        "value": "true"
+                    }
+                }
+            elif expr_str == "false":
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "literal",
+                        "class": "False",
+                        "value": "false"
+                    }
+                }
+            else:
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "literal",
+                        "class": "Unknown",
+                        "value": expr_str
+                    }
+                }
+            instructions.append(instr)
+            order += 1
+        return instructions
+
     def store_method(self):
         if not self.current_method:
             return
+        # Rozparsujeme blokove riadky na inštrukcie
+        instructions = self.parse_block_instructions(self.block_body_lines)
         block = {
             "arity": len(self.block_params),
             "parameters": self.block_params,
-            "body": "\n".join(self.block_body_lines).strip()
+            "instructions": instructions
         }
         self.current_method["block"] = block
         self.current_class["methods"].append(self.current_method)
@@ -161,7 +239,7 @@ class Parser:
                             "description": desc
                         }
                         if self.current_class["name"] == "Main" and selector == "run" and desc:
-                            self.program_description = desc
+                            self.program_description = self.transform_description(desc)
                         continue
                     else:
                         if "[" in stripped:
@@ -174,9 +252,8 @@ class Parser:
                                     "selector": selector,
                                     "description": desc
                                 }
-                                if (self.current_class["name"] == "Main"
-                                    and selector == "run" and desc):
-                                    self.program_description = desc
+                                if self.current_class["name"] == "Main" and selector == "run" and desc:
+                                    self.program_description = self.transform_description(desc)
                                 stripped = stripped[idx:].strip()
                             else:
                                 no_comm = self.remove_comments(stripped)
@@ -212,8 +289,8 @@ class Parser:
                         self.store_method()
                         if trailing:
                             comment_text = self.extract_first_trailing_comment(trailing)
-                            if (comment_text and self.program_description is None
-                                and self.current_class and self.current_class["name"] == "Main"):
+                            if (comment_text and self.program_description is None and
+                                self.current_class and self.current_class["name"] == "Main"):
                                 self.program_description = comment_text
                             if trailing:
                                 self.lines.insert(self.index, trailing)
@@ -270,7 +347,6 @@ class Parser:
         if not main_found or not run_found:
             sys.exit(ErrorType.SEM_IN_MAIN.value)
 
-
 def build_xml(classes, description):
     root = Element("program")
     root.attrib["language"] = "SOL25"
@@ -284,16 +360,27 @@ def build_xml(classes, description):
         for m in c["methods"]:
             meth_elem = SubElement(class_elem, "method")
             meth_elem.attrib["selector"] = m["selector"]
-            block = m.get("block", {"arity": 0, "parameters": [], "body": ""})
+            block = m.get("block", {"arity": 0, "parameters": [], "instructions": []})
             block_elem = SubElement(meth_elem, "block")
-            block_elem.attrib["arity"] = str(block["arity"])
-            for idx, par in enumerate(block["parameters"], start=1):
+            block_elem.attrib["arity"] = str(block.get("arity", 0))
+            for idx, par in enumerate(block.get("parameters", []), start=1):
                 param_elem = SubElement(block_elem, "parameter")
                 param_elem.attrib["order"] = str(idx)
                 param_elem.attrib["name"] = par
-            if block["body"]:
-                body_elem = SubElement(block_elem, "body")
-                body_elem.text = block["body"]
+            for instr in block.get("instructions", []):
+                if instr["type"] == "assign":
+                    assign_elem = SubElement(block_elem, "assign")
+                    assign_elem.attrib["order"] = str(instr["order"])
+                    var_elem = SubElement(assign_elem, "var")
+                    var_elem.attrib["name"] = instr["var"]
+                    expr_elem = SubElement(assign_elem, "expr")
+                    if instr["expr"]["type"] == "literal":
+                        lit_elem = SubElement(expr_elem, "literal")
+                        lit_elem.attrib["class"] = instr["expr"]["class"]
+                        lit_elem.attrib["value"] = instr["expr"]["value"]
+                    elif instr["expr"]["type"] == "var":
+                        var2_elem = SubElement(expr_elem, "var")
+                        var2_elem.attrib["name"] = instr["expr"]["name"]
     return root
 
 def main():
@@ -318,16 +405,10 @@ def main():
     parser.check_main()
     root = build_xml(parser.classes, parser.program_description)
     dom = xml.dom.minidom.parseString(tostring(root, encoding="utf-8"))
-    # Vrati bytes
     pretty_xml = dom.toprettyxml(indent="    ", encoding="UTF-8")
-    # Prevedieme na str
     pretty_str = pretty_xml.decode("utf-8")
-
-    # Nahradime &amp;#10; => &#10;
     pretty_str = pretty_str.replace("&amp;#10;", "&#10;")
-    # Nahradime &amp;nbsp; => &nbsp;
     pretty_str = pretty_str.replace("&amp;nbsp;", "&nbsp;")
-
     sys.stdout.write(pretty_str)
 
 if __name__ == "__main__":

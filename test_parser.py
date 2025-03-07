@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import subprocess
 import sys
 
@@ -7,23 +8,53 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 RESET = "\033[0m"
 
+def numeric_key(filename):
+    """
+    Vrati tuple, ktory pouzijeme na triedenie podla cisla v nazve suboru,
+    napr. test12.in => (12, '')
+    test9.in => (9, '')
+    test10.in => (10, '')
+    Ak by sa tam vyskytovali dodatocne znaky, tie sluzia ako tie-break.
+    """
+    # Ocakavame nazvy typu testX.in, odfiltrujeme prefix test a priponu .in
+    # Napr. test12.in => 'test12.in' => core='12'
+    core = filename
+    if core.startswith('test'):
+        core = core[4:]  # odstranime 'test'
+    if core.endswith('.in'):
+        core = core[:-3]  # odstranime '.in'
+
+    # Najdeme uvodne cislo:
+    m = re.match(r'^(\d+)(.*)', core)
+    if m:
+        number = int(m.group(1))
+        rest = m.group(2)
+        return (number, rest)
+    else:
+        # Ak tam nie je cislo, triedime neskor
+        return (999999999, core)
+
 def normalize_xml(xml_str):
-    # Odstráni prázdne riadky a orezáva medzery na začiatkoch a koncoch riadkov.
+    # Odstrani prazdne riadky a orezava medzery na zaciatkoch a koncoch riadkov
     lines = xml_str.strip().splitlines()
     normalized_lines = [line.strip() for line in lines if line.strip() != ""]
     return "\n".join(normalized_lines)
 
 def run_file_tests():
     tests_dir = "tests"
-    # Vyberieme vsetky subory, ktore maju priponu ".in" a nepatria do parametrov (test0_*)
-    test_files = sorted([f for f in os.listdir(tests_dir)
-                         if f.endswith(".in") and not f.startswith("test0_")])
+    # najdeme vsetky subory konciace na .in (a nie z param. testov)
+    test_files = [f for f in os.listdir(tests_dir)
+                  if f.endswith(".in") and not f.startswith("test0_")]
+    # Zoradime podla cisla
+    test_files.sort(key=numeric_key)
+
     total = len(test_files)
     passed = 0
     if total:
         print("File-based tests:")
+
     for in_file in test_files:
-        test_name = in_file[:-3]  # odstranime priponu ".in"
+        test_name = in_file[:-3]  # odstranime ".in"
         out_file = test_name + ".out"
         rc_file = test_name + ".rc"
         in_path = os.path.join(tests_dir, in_file)
@@ -38,6 +69,7 @@ def run_file_tests():
                 except ValueError:
                     print(f"{RED}Test {test_name}: Chyba vo formate .rc suboru!{RESET}")
                     continue
+
         expected_output = ""
         if os.path.exists(out_path):
             with open(out_path, "r", encoding="utf-8") as f:
@@ -62,9 +94,9 @@ def run_file_tests():
             passed += 1
             continue
 
+        # Porovname vystup
         norm_stdout = normalize_xml(stdout)
         norm_expected = normalize_xml(expected_output)
-
         if norm_stdout == norm_expected:
             print(f"{GREEN}Test {test_name}: OK{RESET}")
             passed += 1
@@ -75,12 +107,12 @@ def run_file_tests():
             print("----- Actual output -----")
             print(norm_stdout)
             print("-------------------------")
+
     if total:
         print(f"File tests: {passed}/{total} passed.\n")
     return passed, total
 
 def run_param_tests():
-    # Parametricke testy: test0_1 az test0_9
     param_tests = [
         {"name": "test0_1", "args": ["--hekp"], "expected_rc": 10},
         {"name": "test0_2", "args": ["--help", "asd"], "expected_rc": 10},
@@ -100,7 +132,6 @@ def run_param_tests():
         args = test["args"]
         expected_rc = test["expected_rc"]
         cmd = ["python3", "parse25.py"] + args
-        # Pre parameter testy dodavame prazdny vstup
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True)

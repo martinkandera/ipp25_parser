@@ -1,0 +1,2 @@
+class Main : Object {run [|]}
+class Main2 : Object {run [|]}

@@ -6,6 +6,7 @@ from enum import Enum
 import xml.dom.minidom
 from xml.etree.ElementTree import Element, SubElement, tostring
 
+
 class ErrorType(Enum):
     NO_ERROR = 0
     MISSING_PARAM = 10
@@ -17,6 +18,7 @@ class ErrorType(Enum):
     SEM_COLLISION = 34
     SEM_OTHER = 35
 
+
 def show_help():
     print("Skript parse25.py parsuje zdrojovy kod jazyka SOL25 zo vstupu")
     print("a generuje XML reprezentaciu programu na vystup.")
@@ -25,9 +27,12 @@ def show_help():
     print("  --help        Vypise tuto napovedu a skonci.")
     sys.exit(ErrorType.NO_ERROR.value)
 
+
 class Parser:
-    class_header_re = re.compile(r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
-    method_header_re = re.compile(r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
+    class_header_re = re.compile(
+        r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
+    method_header_re = re.compile(
+        r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
 
     def __init__(self, lines):
         self.lines = lines
@@ -52,18 +57,36 @@ class Parser:
         self.index += 1
 
     def remove_comments(self, line):
+        """
+        Remove text enclosed in double quotes as comments,
+        but ignore double quotes if inside a single-quoted string.
+        """
         result = ""
+        in_single = False
         i = 0
         while i < len(line):
-            if line[i] == '"':
+            ch = line[i]
+            if ch == "'" and not in_single:
+                # entering a single-quoted string
+                in_single = True
+                result += ch
+                i += 1
+            elif ch == "'" and in_single:
+                # leaving a single-quoted string
+                in_single = False
+                result += ch
+                i += 1
+            elif ch == '"' and not in_single:
+                # start of a comment block
                 j = i + 1
                 while j < len(line) and line[j] != '"':
                     j += 1
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                # skip the comment (including the closing double quote)
                 i = j + 1
             else:
-                result += line[i]
+                result += ch
                 i += 1
         return result
 
@@ -75,7 +98,7 @@ class Parser:
         return self.transform_description(raw_comment)
 
     def transform_description(self, desc):
-        # Zjednotime reálne newlines aj literalne \n do jedneho symbolu
+        # Replace real newlines and literal "\n" with a unified marker.
         desc = desc.replace('\n', '\u0001')
         desc = desc.replace(r'\n', '\u0001')
         out = []
@@ -119,15 +142,6 @@ class Parser:
         return (selector, desc)
 
     def parse_block_instructions(self, lines_in_block):
-        """
-        Zjednodusene parsuje priradenie vo formate:
-          x := 10.
-        Vracia list instrukcii. Každá inštrukcia je slovnik:
-          { 'type': 'assign',
-            'order': N,
-            'var': 'x',
-            'expr': {'type': 'literal', 'class': 'Integer'/'Nil'/'True'/'False', 'value': '...'} }
-        """
         instructions = []
         order = 1
         assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$")
@@ -182,6 +196,22 @@ class Parser:
                         "value": "false"
                     }
                 }
+            elif expr_str.startswith("'") and expr_str.endswith("'"):
+                # Process string literal: remove the surrounding apostrophes.
+                value = expr_str[1:-1]
+                # Replace the escaped apostrophe sequence: we expect one backslash followed by an apostrophe.
+                # We want the final value to contain: a space, two backslashes, and &apos; (e.g., "a \\&apos; 10")
+                value = value.replace("\\'", "\\&apos;")
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "literal",
+                        "class": "String",
+                        "value": value
+                    }
+                }
             else:
                 instr = {
                     "type": "assign",
@@ -200,7 +230,6 @@ class Parser:
     def store_method(self):
         if not self.current_method:
             return
-        # Rozparsujeme blokove riadky na inštrukcie
         instructions = self.parse_block_instructions(self.block_body_lines)
         block = {
             "arity": len(self.block_params),
@@ -220,7 +249,6 @@ class Parser:
             self.advance()
             if not line.strip():
                 continue
-
             if self.current_class is None:
                 self.parse_class_header(line.strip())
             else:
@@ -229,7 +257,6 @@ class Parser:
                     self.classes.append(self.current_class)
                     self.current_class = None
                     continue
-
                 if self.current_method is None and not self.in_block:
                     m_head = self.parse_method_header(stripped)
                     if m_head:
@@ -265,7 +292,6 @@ class Parser:
                             if not no_comm.strip():
                                 continue
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
-
                 if not self.in_block:
                     if "[" in stripped and "]" in stripped:
                         idx_open = stripped.find("[")
@@ -347,6 +373,7 @@ class Parser:
         if not main_found or not run_found:
             sys.exit(ErrorType.SEM_IN_MAIN.value)
 
+
 def build_xml(classes, description):
     root = Element("program")
     root.attrib["language"] = "SOL25"
@@ -390,18 +417,15 @@ def main():
         else:
             print("Neznamy parameter alebo zakazana kombinacia parametrov.", file=sys.stderr)
             sys.exit(ErrorType.MISSING_PARAM.value)
-
     lines = sys.stdin.read().splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
     if not lines:
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
-
     parser = Parser(lines)
     parser.parse_main()
     if parser.current_class is not None or parser.in_block or parser.current_method is not None:
         sys.exit(ErrorType.SYN_ERR_INPUT.value)
-
     parser.check_main()
     root = build_xml(parser.classes, parser.program_description)
     dom = xml.dom.minidom.parseString(tostring(root, encoding="utf-8"))
@@ -409,6 +433,9 @@ def main():
     pretty_str = pretty_xml.decode("utf-8")
     pretty_str = pretty_str.replace("&amp;#10;", "&#10;")
     pretty_str = pretty_str.replace("&amp;nbsp;", "&nbsp;")
+    pretty_str = pretty_str.replace("&amp;apos;", "&apos;")
+    # Fix triple backslash: if there is '\\\\&apos;' change it to '\\&apos;'
+    pretty_str = pretty_str.replace("\\\\\\&apos;", "\\\\&apos;")
     sys.stdout.write(pretty_str)
 
 if __name__ == "__main__":

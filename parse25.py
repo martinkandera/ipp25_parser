@@ -57,34 +57,26 @@ class Parser:
         self.index += 1
 
     def remove_comments(self, line):
-        """
-        Remove text enclosed in double quotes as comments,
-        but ignore double quotes if inside a single-quoted string.
-        """
         result = ""
-        in_single = False
         i = 0
+        in_single = False  # track if inside a single-quoted literal
         while i < len(line):
             ch = line[i]
             if ch == "'" and not in_single:
-                # entering a single-quoted string
                 in_single = True
                 result += ch
                 i += 1
             elif ch == "'" and in_single:
-                # leaving a single-quoted string
                 in_single = False
                 result += ch
                 i += 1
-            elif ch == '"' and not in_single:
-                # start of a comment block
+            elif not in_single and ch == '"':
                 j = i + 1
                 while j < len(line) and line[j] != '"':
                     j += 1
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                # skip the comment (including the closing double quote)
-                i = j + 1
+                i = j + 1  # skip comment block
             else:
                 result += ch
                 i += 1
@@ -98,7 +90,6 @@ class Parser:
         return self.transform_description(raw_comment)
 
     def transform_description(self, desc):
-        # Replace real newlines and literal "\n" with a unified marker.
         desc = desc.replace('\n', '\u0001')
         desc = desc.replace(r'\n', '\u0001')
         out = []
@@ -117,6 +108,12 @@ class Parser:
                 out.append(desc[i])
                 i += 1
         return "".join(out)
+
+    def strip_parentheses(self, expr):
+        expr = expr.strip()
+        while expr.startswith("(") and expr.endswith(")") and len(expr) > 1:
+            expr = expr[1:-1].strip()
+        return expr
 
     def parse_class_header(self, stripped):
         m = self.class_header_re.match(stripped)
@@ -144,7 +141,7 @@ class Parser:
     def parse_block_instructions(self, lines_in_block):
         instructions = []
         order = 1
-        assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$")
+        assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+)\.\s*$")
         integer_re = re.compile(r"^[+-]?\d+$")
         for line in lines_in_block:
             m = assign_re.match(line.strip())
@@ -152,7 +149,24 @@ class Parser:
                 continue
             var_name = m.group(1)
             expr_str = m.group(2).strip()
-            if integer_re.match(expr_str):
+            if expr_str.startswith("[") and expr_str.endswith("]"):
+                clean_expr = expr_str  # keep the block literal intact
+            else:
+                clean_expr = self.strip_parentheses(expr_str)
+            if clean_expr.startswith("[") and clean_expr.endswith("]"):
+                block_node = {
+                    "type": "block",
+                    "arity": 0,
+                    "parameters": [],
+                    "instructions": []
+                }
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": block_node
+                }
+            elif integer_re.match(clean_expr):
                 instr = {
                     "type": "assign",
                     "order": order,
@@ -160,10 +174,10 @@ class Parser:
                     "expr": {
                         "type": "literal",
                         "class": "Integer",
-                        "value": expr_str
+                        "value": clean_expr
                     }
                 }
-            elif expr_str == "nil":
+            elif clean_expr == "nil":
                 instr = {
                     "type": "assign",
                     "order": order,
@@ -174,7 +188,7 @@ class Parser:
                         "value": "nil"
                     }
                 }
-            elif expr_str == "true":
+            elif clean_expr == "true":
                 instr = {
                     "type": "assign",
                     "order": order,
@@ -185,7 +199,7 @@ class Parser:
                         "value": "true"
                     }
                 }
-            elif expr_str == "false":
+            elif clean_expr == "false":
                 instr = {
                     "type": "assign",
                     "order": order,
@@ -196,11 +210,8 @@ class Parser:
                         "value": "false"
                     }
                 }
-            elif expr_str.startswith("'") and expr_str.endswith("'"):
-                # Process string literal: remove the surrounding apostrophes.
-                value = expr_str[1:-1]
-                # Replace the escaped apostrophe sequence: we expect one backslash followed by an apostrophe.
-                # We want the final value to contain: a space, two backslashes, and &apos; (e.g., "a \\&apos; 10")
+            elif clean_expr.startswith("'") and clean_expr.endswith("'"):
+                value = clean_expr[1:-1]
                 value = value.replace("\\'", "\\&apos;")
                 instr = {
                     "type": "assign",
@@ -213,16 +224,65 @@ class Parser:
                     }
                 }
             else:
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": {
-                        "type": "literal",
-                        "class": "Unknown",
-                        "value": expr_str
+                parts = clean_expr.split()
+                if len(parts) == 2:
+                    receiver = parts[0]
+                    selector = parts[1]
+                    instr = {
+                        "type": "assign",
+                        "order": order,
+                        "var": var_name,
+                        "expr": {
+                            "type": "send",
+                            "selector": selector,
+                            "expr": {
+                                "type": "literal",
+                                "class": "class",
+                                "value": receiver
+                            },
+                            "args": []
+                        }
                     }
-                }
+                elif len(parts) == 3 and parts[1].endswith(":"):
+                    receiver = parts[0]
+                    selector = parts[1]
+                    arg_token = parts[2]
+                    if integer_re.match(arg_token):
+                        arg_expr = {"type": "literal", "class": "Integer", "value": arg_token}
+                    elif arg_token == "nil":
+                        arg_expr = {"type": "literal", "class": "Nil", "value": "nil"}
+                    elif arg_token == "true":
+                        arg_expr = {"type": "literal", "class": "True", "value": "true"}
+                    elif arg_token == "false":
+                        arg_expr = {"type": "literal", "class": "False", "value": "false"}
+                    elif arg_token.startswith("'") and arg_token.endswith("'"):
+                        val = arg_token[1:-1]
+                        val = val.replace("\\'", "\\&apos;")
+                        arg_expr = {"type": "literal", "class": "String", "value": val}
+                    else:
+                        arg_expr = {"type": "literal", "class": "Unknown", "value": arg_token}
+                    instr = {
+                        "type": "assign",
+                        "order": order,
+                        "var": var_name,
+                        "expr": {
+                            "type": "send",
+                            "selector": selector,
+                            "expr": {"type": "literal", "class": "class", "value": receiver},
+                            "args": [{"order": 1, "expr": arg_expr}]
+                        }
+                    }
+                else:
+                    instr = {
+                        "type": "assign",
+                        "order": order,
+                        "var": var_name,
+                        "expr": {
+                            "type": "literal",
+                            "class": "Unknown",
+                            "value": clean_expr
+                        }
+                    }
             instructions.append(instr)
             order += 1
         return instructions
@@ -231,6 +291,9 @@ class Parser:
         if not self.current_method:
             return
         instructions = self.parse_block_instructions(self.block_body_lines)
+        # NEW: If block_params contains exactly one element "=" (ignoring whitespace), clear it.
+        if len(self.block_params) == 1 and self.block_params[0].strip() == "=":
+            self.block_params = []
         block = {
             "arity": len(self.block_params),
             "parameters": self.block_params,
@@ -261,10 +324,7 @@ class Parser:
                     m_head = self.parse_method_header(stripped)
                     if m_head:
                         selector, desc = m_head
-                        self.current_method = {
-                            "selector": selector,
-                            "description": desc
-                        }
+                        self.current_method = {"selector": selector, "description": desc}
                         if self.current_class["name"] == "Main" and selector == "run" and desc:
                             self.program_description = self.transform_description(desc)
                         continue
@@ -275,10 +335,7 @@ class Parser:
                             header_match = self.parse_method_header(header_part)
                             if header_match:
                                 selector, desc = header_match
-                                self.current_method = {
-                                    "selector": selector,
-                                    "description": desc
-                                }
+                                self.current_method = {"selector": selector, "description": desc}
                                 if self.current_class["name"] == "Main" and selector == "run" and desc:
                                     self.program_description = self.transform_description(desc)
                                 stripped = stripped[idx:].strip()
@@ -304,6 +361,8 @@ class Parser:
                         no_comm_block = self.remove_comments(block_literal)
                         if "|" in no_comm_block:
                             left = no_comm_block[1:no_comm_block.index("|")].strip()
+                            if not left.startswith(":"):
+                                left = ""
                             if left:
                                 tokens = left.split()
                                 for t in tokens:
@@ -312,8 +371,11 @@ class Parser:
                             right = no_comm_block[no_comm_block.index("|")+1:-1].strip()
                             if right:
                                 self.block_body_lines.append(right)
+                        else:
+                            self.block_params = []
+                            self.block_body_lines = []
                         self.store_method()
-                        if trailing:
+                        if trailing and trailing.strip() != "=":
                             comment_text = self.extract_first_trailing_comment(trailing)
                             if (comment_text and self.program_description is None and
                                 self.current_class and self.current_class["name"] == "Main"):
@@ -327,6 +389,8 @@ class Parser:
                         no_comm = self.remove_comments(stripped)
                         if "|" in no_comm:
                             left = no_comm[1:no_comm.index("|")].strip()
+                            if not left.startswith(":"):
+                                left = ""
                             if left:
                                 tokens = left.split()
                                 for t in tokens:
@@ -408,6 +472,28 @@ def build_xml(classes, description):
                     elif instr["expr"]["type"] == "var":
                         var2_elem = SubElement(expr_elem, "var")
                         var2_elem.attrib["name"] = instr["expr"]["name"]
+                    elif instr["expr"]["type"] == "send":
+                        send_elem = SubElement(expr_elem, "send")
+                        send_elem.attrib["selector"] = instr["expr"]["selector"]
+                        inner_expr_elem = SubElement(send_elem, "expr")
+                        if instr["expr"]["expr"]["type"] == "literal":
+                            lit_elem = SubElement(inner_expr_elem, "literal")
+                            lit_elem.attrib["class"] = instr["expr"]["expr"]["class"]
+                            lit_elem.attrib["value"] = instr["expr"]["expr"]["value"]
+                        elif instr["expr"]["expr"]["type"] == "var":
+                            var_elem2 = SubElement(inner_expr_elem, "var")
+                            var_elem2.attrib["name"] = instr["expr"]["expr"]["name"]
+                        for arg in instr["expr"].get("args", []):
+                            arg_elem = SubElement(send_elem, "arg")
+                            arg_elem.attrib["order"] = str(arg["order"])
+                            arg_expr_elem = SubElement(arg_elem, "expr")
+                            if arg["expr"]["type"] == "literal":
+                                lit_elem = SubElement(arg_expr_elem, "literal")
+                                lit_elem.attrib["class"] = arg["expr"]["class"]
+                                lit_elem.attrib["value"] = arg["expr"]["value"]
+                            elif arg["expr"]["type"] == "var":
+                                var_elem3 = SubElement(arg_expr_elem, "var")
+                                var_elem3.attrib["name"] = arg["expr"]["name"]
     return root
 
 def main():
@@ -434,7 +520,6 @@ def main():
     pretty_str = pretty_str.replace("&amp;#10;", "&#10;")
     pretty_str = pretty_str.replace("&amp;nbsp;", "&nbsp;")
     pretty_str = pretty_str.replace("&amp;apos;", "&apos;")
-    # Fix triple backslash: if there is '\\\\&apos;' change it to '\\&apos;'
     pretty_str = pretty_str.replace("\\\\\\&apos;", "\\\\&apos;")
     sys.stdout.write(pretty_str)
 

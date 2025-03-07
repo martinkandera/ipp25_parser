@@ -6,7 +6,7 @@
                 <assign order="1">
                     <var name="x"/>
                     <expr>
-                        <send selector ="new">
+                        <send selector="new">
                             <expr>
                                 <literal class="class" value="Integer"/>
                             </expr>

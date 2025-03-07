@@ -1,0 +1,5 @@
+class Main : Object {
+    run [|
+        x := 'a \\n 10'.
+    ]
+}

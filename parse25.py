@@ -70,14 +70,33 @@ class Parser:
 
     def extract_first_trailing_comment(self, text):
         m = re.search(r'"([^"]*)"', text)
-        if m:
-            comment = m.group(1)
-            # Nahradime real newlines
-            comment = comment.replace('\n', '&nbsp;')
-            # Nahradime literalnu sekvenciu \n
-            comment = comment.replace(r'\n', '&nbsp;')
-            return comment
-        return None
+        if not m:
+            return None
+        raw_comment = m.group(1)
+        return self.transform_description(raw_comment)
+
+    def transform_description(self, desc):
+        # 1. Zjednotenie reálnych newline a literalnych \n do jedneho symbolu
+        desc = desc.replace('\n', '\u0001')
+        desc = desc.replace(r'\n', '\u0001')
+        # 2. Transformacia skupin
+        out = []
+        i = 0
+        while i < len(desc):
+            if desc[i] == '\u0001':
+                # zistime dlzku skupiny
+                start = i
+                while i < len(desc) and desc[i] == '\u0001':
+                    i += 1
+                count = i - start
+                if count == 1:
+                    out.append("&nbsp;")
+                else:
+                    out.append("&#10;" * count)
+            else:
+                out.append(desc[i])
+                i += 1
+        return "".join(out)
 
     def parse_class_header(self, stripped):
         m = self.class_header_re.match(stripped)
@@ -303,8 +322,12 @@ def main():
     pretty_xml = dom.toprettyxml(indent="    ", encoding="UTF-8")
     # Prevedieme na str
     pretty_str = pretty_xml.decode("utf-8")
-    # Nahradime &amp;nbsp; -> &nbsp;
+
+    # Nahradime &amp;#10; => &#10;
+    pretty_str = pretty_str.replace("&amp;#10;", "&#10;")
+    # Nahradime &amp;nbsp; => &nbsp;
     pretty_str = pretty_str.replace("&amp;nbsp;", "&nbsp;")
+
     sys.stdout.write(pretty_str)
 
 if __name__ == "__main__":

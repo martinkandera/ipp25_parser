@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import sys
 import re
 from enum import Enum
@@ -29,10 +28,8 @@ def show_help():
 
 
 class Parser:
-    class_header_re = re.compile(
-        r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
-    method_header_re = re.compile(
-        r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
+    class_header_re = re.compile(r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
+    method_header_re = re.compile(r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
 
     def __init__(self, lines):
         self.lines = lines
@@ -76,7 +73,7 @@ class Parser:
                     j += 1
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                i = j + 1  # skip the comment
+                i = j + 1  # skip comment entirely
             else:
                 result += ch
                 i += 1
@@ -111,9 +108,94 @@ class Parser:
 
     def strip_parentheses(self, expr):
         expr = expr.strip()
-        while expr.startswith("(") and expr.endswith(")") and len(expr) > 1:
+        # Remove outer parentheses as long as they are balanced.
+        while expr.startswith("(") and expr.endswith(")") and self.check_balanced(expr[1:-1]):
             expr = expr[1:-1].strip()
         return expr
+
+    def check_balanced(self, s):
+        depth = 0
+        for ch in s:
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    return False
+        return depth == 0
+
+    def tokenize(self, s):
+        tokens = []
+        current = ""
+        depth = 0
+        for ch in s:
+            if ch == '(':
+                depth += 1
+                current += ch
+            elif ch == ')':
+                depth -= 1
+                current += ch
+            elif ch.isspace() and depth == 0:
+                if current:
+                    tokens.append(current)
+                    current = ""
+            else:
+                current += ch
+        if current:
+            tokens.append(current)
+        return tokens
+
+    def parse_expr(self, expr_str):
+        expr_str = expr_str.strip()
+        expr_str = self.strip_parentheses(expr_str)
+        # Check for literals
+        if re.match(r"^[+-]?\d+$", expr_str):
+            return {"type": "literal", "class": "Integer", "value": expr_str}
+        if expr_str == "nil":
+            return {"type": "literal", "class": "Nil", "value": expr_str}
+        if expr_str == "true":
+            return {"type": "literal", "class": "True", "value": expr_str}
+        if expr_str == "false":
+            return {"type": "literal", "class": "False", "value": expr_str}
+        if expr_str.startswith("'") and expr_str.endswith("'"):
+            value = expr_str[1:-1]
+            value = value.replace("\\'", "\\&apos;")
+            value = value.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;").replace('"', "&quot;")
+            return {"type": "literal", "class": "String", "value": value}
+        tokens = self.tokenize(expr_str)
+        if len(tokens) == 0:
+            return None
+        if len(tokens) == 1:
+            # Single token: assume variable.
+            return {"type": "var", "name": tokens[0]}
+        if len(tokens) == 2:
+            receiver = tokens[0]
+            selector = tokens[1]
+            receiver_node = {"type": "literal", "class": "class", "value": receiver} if receiver[0].isupper() else {
+                "type": "var", "name": receiver}
+            return {"type": "send", "selector": selector, "expr": receiver_node, "args": []}
+        # If tokens[1] ends with ":" then assume send expression with arguments.
+        if tokens[1].endswith(":"):
+            receiver = tokens[0]
+            receiver_node = {"type": "literal", "class": "class", "value": receiver} if receiver[0].isupper() else {
+                "type": "var", "name": receiver}
+            selector_parts = []
+            args = []
+            i = 1
+            while i < len(tokens):
+                token = tokens[i]
+                if not token.endswith(":"):
+                    break
+                selector_parts.append(token)
+                if i + 1 < len(tokens):
+                    arg_node = self.parse_expr(tokens[i + 1])
+                    args.append({"order": len(args) + 1, "expr": arg_node})
+                    i += 2
+                else:
+                    break
+            selector = "".join(selector_parts)
+            return {"type": "send", "selector": selector, "expr": receiver_node, "args": args}
+        return {"type": "literal", "class": "Unknown", "value": expr_str}
 
     def parse_class_header(self, stripped):
         m = self.class_header_re.match(stripped)
@@ -122,11 +204,7 @@ class Parser:
         cls_name = m.group(1)
         parent = m.group(2) if m.group(2) else ""
         remainder = m.group(3).strip()
-        self.current_class = {
-            "name": cls_name,
-            "parent": parent,
-            "methods": []
-        }
+        self.current_class = {"name": cls_name, "parent": parent, "methods": []}
         if remainder:
             self.lines.insert(self.index, remainder)
 
@@ -152,155 +230,39 @@ class Parser:
             clean_expr = self.strip_parentheses(expr_str)
             if clean_expr.startswith("[") and clean_expr.endswith("]") and "|" in clean_expr:
                 param_part = clean_expr[1:clean_expr.index("|")].strip()
-                # body part is expected to be empty for test25.
                 params = []
                 if param_part:
                     tokens = param_part.split()
                     for token in tokens:
                         if token.startswith(":"):
                             params.append(token[1:])
-                block_node = {
-                    "type": "block",
-                    "arity": len(params),
-                    "parameters": params,
-                    "instructions": []
-                }
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": block_node
-                }
+                block_node = {"type": "block", "arity": len(params), "parameters": params, "instructions": []}
+                instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
             elif clean_expr.startswith("[") and clean_expr.endswith("]"):
-                block_node = {
-                    "type": "block",
-                    "arity": 0,
-                    "parameters": [],
-                    "instructions": []
-                }
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": block_node
-                }
+                block_node = {"type": "block", "arity": 0, "parameters": [], "instructions": []}
+                instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
             elif integer_re.match(clean_expr):
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": {
-                        "type": "literal",
-                        "class": "Integer",
-                        "value": clean_expr
-                    }
-                }
+                instr = {"type": "assign", "order": order, "var": var_name,
+                         "expr": {"type": "literal", "class": "Integer", "value": clean_expr}}
             elif clean_expr == "nil":
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": {
-                        "type": "literal",
-                        "class": "Nil",
-                        "value": "nil"
-                    }
-                }
+                instr = {"type": "assign", "order": order, "var": var_name,
+                         "expr": {"type": "literal", "class": "Nil", "value": "nil"}}
             elif clean_expr == "true":
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": {
-                        "type": "literal",
-                        "class": "True",
-                        "value": "true"
-                    }
-                }
+                instr = {"type": "assign", "order": order, "var": var_name,
+                         "expr": {"type": "literal", "class": "True", "value": "true"}}
             elif clean_expr == "false":
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": {
-                        "type": "literal",
-                        "class": "False",
-                        "value": "false"
-                    }
-                }
+                instr = {"type": "assign", "order": order, "var": var_name,
+                         "expr": {"type": "literal", "class": "False", "value": "false"}}
             elif clean_expr.startswith("'") and clean_expr.endswith("'"):
                 value = clean_expr[1:-1]
                 value = value.replace("\\'", "\\&apos;")
-                instr = {
-                    "type": "assign",
-                    "order": order,
-                    "var": var_name,
-                    "expr": {
-                        "type": "literal",
-                        "class": "String",
-                        "value": value
-                    }
-                }
+                instr = {"type": "assign", "order": order, "var": var_name,
+                         "expr": {"type": "literal", "class": "String", "value": value}}
             else:
-                parts = clean_expr.split()
-                if len(parts) == 2:
-                    receiver = parts[0]
-                    selector = parts[1]
-                    instr = {
-                        "type": "assign",
-                        "order": order,
-                        "var": var_name,
-                        "expr": {
-                            "type": "send",
-                            "selector": selector,
-                            "expr": {
-                                "type": "literal",
-                                "class": "class",
-                                "value": receiver
-                            },
-                            "args": []
-                        }
-                    }
-                elif len(parts) == 3 and parts[1].endswith(":"):
-                    receiver = parts[0]
-                    selector = parts[1]
-                    arg_token = parts[2]
-                    if integer_re.match(arg_token):
-                        arg_expr = {"type": "literal", "class": "Integer", "value": arg_token}
-                    elif arg_token == "nil":
-                        arg_expr = {"type": "literal", "class": "Nil", "value": "nil"}
-                    elif arg_token == "true":
-                        arg_expr = {"type": "literal", "class": "True", "value": "true"}
-                    elif arg_token == "false":
-                        arg_expr = {"type": "literal", "class": "False", "value": "false"}
-                    elif arg_token.startswith("'") and arg_token.endswith("'"):
-                        val = arg_token[1:-1]
-                        val = val.replace("\\'", "\\&apos;")
-                        arg_expr = {"type": "literal", "class": "String", "value": val}
-                    else:
-                        arg_expr = {"type": "literal", "class": "Unknown", "value": arg_token}
-                    instr = {
-                        "type": "assign",
-                        "order": order,
-                        "var": var_name,
-                        "expr": {
-                            "type": "send",
-                            "selector": selector,
-                            "expr": {"type": "literal", "class": "class", "value": receiver},
-                            "args": [{"order": 1, "expr": arg_expr}]
-                        }
-                    }
-                else:
-                    instr = {
-                        "type": "assign",
-                        "order": order,
-                        "var": var_name,
-                        "expr": {
-                            "type": "literal",
-                            "class": "Unknown",
-                            "value": clean_expr
-                        }
-                    }
+                node = self.parse_expr(clean_expr)
+                if node is None:
+                    node = {"type": "literal", "class": "Unknown", "value": clean_expr}
+                instr = {"type": "assign", "order": order, "var": var_name, "expr": node}
             instructions.append(instr)
             order += 1
         return instructions
@@ -309,11 +271,7 @@ class Parser:
         if not self.current_method:
             return
         instructions = self.parse_block_instructions(self.block_body_lines)
-        block = {
-            "arity": len(self.block_params),
-            "parameters": self.block_params,
-            "instructions": instructions
-        }
+        block = {"arity": len(self.block_params), "parameters": self.block_params, "instructions": instructions}
         self.current_method["block"] = block
         self.current_class["methods"].append(self.current_method)
         self.current_method = None
@@ -364,29 +322,12 @@ class Parser:
                             if not no_comm.strip():
                                 continue
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                # Now, handle block lines
                 if not self.in_block:
-                    if stripped.startswith("[") and not ("]" in stripped):
-                        # Start of a multi-line block
-                        self.in_block = True
-                        self.block_params = []
-                        self.block_body_lines = []
-                        # Extract parameters if present in the header line (between '[' and '|')
-                        no_comm = self.remove_comments(stripped)
-                        if "|" in no_comm:
-                            left = no_comm[1:no_comm.index("|")].strip()
-                            if left:
-                                tokens = left.split()
-                                for t in tokens:
-                                    if t.startswith(":"):
-                                        self.block_params.append(t[1:])
-                        # Do not store method yet; wait for closing bracket.
-                    elif "[" in stripped and "]" in stripped:
-                        # A single-line block (not assignment) – treat as method block header.
+                    if "[" in stripped and "]" in stripped:
                         idx_open = stripped.find("[")
                         idx_close = stripped.find("]")
-                        block_literal = stripped[idx_open:idx_close+1]
-                        trailing = stripped[idx_close+1:].strip()
+                        block_literal = stripped[idx_open:idx_close + 1]
+                        trailing = stripped[idx_close + 1:].strip()
                         self.in_block = True
                         self.block_params = []
                         self.block_body_lines = []
@@ -398,7 +339,7 @@ class Parser:
                                 for t in tokens:
                                     if t.startswith(":"):
                                         self.block_params.append(t[1:])
-                            right = no_comm_block[no_comm_block.index("|")+1:-1].strip()
+                            right = no_comm_block[no_comm_block.index("|") + 1:-1].strip()
                             if right:
                                 self.block_body_lines.append(right)
                         self.store_method()
@@ -407,27 +348,49 @@ class Parser:
                                 pass
                             else:
                                 comment_text = self.extract_first_trailing_comment(trailing)
-                                if (comment_text and self.program_description is None and
-                                    self.current_class and self.current_class["name"] == "Main"):
+                                if (comment_text and self.program_description is None and self.current_class and
+                                        self.current_class["name"] == "Main"):
                                     self.program_description = comment_text
                                 if trailing:
                                     self.lines.insert(self.index, trailing)
+                    elif stripped.startswith("["):
+                        self.in_block = True
+                        self.block_params = []
+                        self.block_body_lines = []
+                        no_comm = self.remove_comments(stripped)
+                        if "|" in no_comm:
+                            left = no_comm[1:no_comm.index("|")].strip()
+                            if left:
+                                tokens = left.split()
+                                for t in tokens:
+                                    if t.startswith(":"):
+                                        self.block_params.append(t[1:])
+                            right = no_comm[no_comm.index("|") + 1:].strip()
+                            if right and right != "]":
+                                self.block_body_lines.append(right)
                     else:
-                        # If in method block but not starting a new block header, then this line is a body line.
-                        if self.in_block:
-                            no_comm = self.remove_comments(stripped)
-                            self.block_body_lines.append(no_comm)
-                        else:
-                            no_comm = self.remove_comments(stripped)
-                            if not no_comm.strip():
-                                continue
-                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                        no_comm = self.remove_comments(stripped)
+                        if not no_comm.strip():
+                            continue
+                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 else:
                     if stripped == "]":
                         self.store_method()
                     else:
                         no_comm = self.remove_comments(stripped)
-                        self.block_body_lines.append(no_comm)
+                        if "|" in no_comm and not self.block_params:
+                            left = no_comm[:no_comm.index("|")].strip()
+                            if left:
+                                tokens = left.split()
+                                for t in tokens:
+                                    if t.startswith(":"):
+                                        self.block_params.append(t[1:])
+                            right = no_comm[no_comm.index("|") + 1:].strip()
+                            if right:
+                                self.block_body_lines.append(right)
+                        else:
+                            if no_comm.strip():
+                                self.block_body_lines.append(no_comm)
 
     def check_main(self):
         main_found = False
@@ -509,6 +472,7 @@ def build_xml(classes, description):
                             param_elem.attrib["name"] = par
     return root
 
+
 def main():
     if len(sys.argv) != 1:
         if len(sys.argv) == 2 and sys.argv[1] == "--help":
@@ -535,6 +499,7 @@ def main():
     pretty_str = pretty_str.replace("&amp;apos;", "&apos;")
     pretty_str = pretty_str.replace("\\\\\\&apos;", "\\\\&apos;")
     sys.stdout.write(pretty_str)
+
 
 if __name__ == "__main__":
     main()

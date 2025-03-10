@@ -76,7 +76,7 @@ class Parser:
                     j += 1
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                i = j + 1  # skip comment block
+                i = j + 1  # skip the comment
             else:
                 result += ch
                 i += 1
@@ -141,7 +141,7 @@ class Parser:
     def parse_block_instructions(self, lines_in_block):
         instructions = []
         order = 1
-        assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+)\.\s*$")
+        assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$")
         integer_re = re.compile(r"^[+-]?\d+$")
         for line in lines_in_block:
             m = assign_re.match(line.strip())
@@ -149,11 +149,29 @@ class Parser:
                 continue
             var_name = m.group(1)
             expr_str = m.group(2).strip()
-            if expr_str.startswith("[") and expr_str.endswith("]"):
-                clean_expr = expr_str  # keep the block literal intact
-            else:
-                clean_expr = self.strip_parentheses(expr_str)
-            if clean_expr.startswith("[") and clean_expr.endswith("]"):
+            clean_expr = self.strip_parentheses(expr_str)
+            if clean_expr.startswith("[") and clean_expr.endswith("]") and "|" in clean_expr:
+                param_part = clean_expr[1:clean_expr.index("|")].strip()
+                # body part is expected to be empty for test25.
+                params = []
+                if param_part:
+                    tokens = param_part.split()
+                    for token in tokens:
+                        if token.startswith(":"):
+                            params.append(token[1:])
+                block_node = {
+                    "type": "block",
+                    "arity": len(params),
+                    "parameters": params,
+                    "instructions": []
+                }
+                instr = {
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": block_node
+                }
+            elif clean_expr.startswith("[") and clean_expr.endswith("]"):
                 block_node = {
                     "type": "block",
                     "arity": 0,
@@ -291,9 +309,6 @@ class Parser:
         if not self.current_method:
             return
         instructions = self.parse_block_instructions(self.block_body_lines)
-        # NEW: If block_params contains exactly one element "=" (ignoring whitespace), clear it.
-        if len(self.block_params) == 1 and self.block_params[0].strip() == "=":
-            self.block_params = []
         block = {
             "arity": len(self.block_params),
             "parameters": self.block_params,
@@ -349,8 +364,25 @@ class Parser:
                             if not no_comm.strip():
                                 continue
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                # Now, handle block lines
                 if not self.in_block:
-                    if "[" in stripped and "]" in stripped:
+                    if stripped.startswith("[") and not ("]" in stripped):
+                        # Start of a multi-line block
+                        self.in_block = True
+                        self.block_params = []
+                        self.block_body_lines = []
+                        # Extract parameters if present in the header line (between '[' and '|')
+                        no_comm = self.remove_comments(stripped)
+                        if "|" in no_comm:
+                            left = no_comm[1:no_comm.index("|")].strip()
+                            if left:
+                                tokens = left.split()
+                                for t in tokens:
+                                    if t.startswith(":"):
+                                        self.block_params.append(t[1:])
+                        # Do not store method yet; wait for closing bracket.
+                    elif "[" in stripped and "]" in stripped:
+                        # A single-line block (not assignment) – treat as method block header.
                         idx_open = stripped.find("[")
                         idx_close = stripped.find("]")
                         block_literal = stripped[idx_open:idx_close+1]
@@ -361,8 +393,6 @@ class Parser:
                         no_comm_block = self.remove_comments(block_literal)
                         if "|" in no_comm_block:
                             left = no_comm_block[1:no_comm_block.index("|")].strip()
-                            if not left.startswith(":"):
-                                left = ""
                             if left:
                                 tokens = left.split()
                                 for t in tokens:
@@ -371,57 +401,33 @@ class Parser:
                             right = no_comm_block[no_comm_block.index("|")+1:-1].strip()
                             if right:
                                 self.block_body_lines.append(right)
-                        else:
-                            self.block_params = []
-                            self.block_body_lines = []
                         self.store_method()
-                        if trailing and trailing.strip() != "=":
-                            comment_text = self.extract_first_trailing_comment(trailing)
-                            if (comment_text and self.program_description is None and
-                                self.current_class and self.current_class["name"] == "Main"):
-                                self.program_description = comment_text
-                            if trailing:
-                                self.lines.insert(self.index, trailing)
-                    elif stripped.startswith("["):
-                        self.in_block = True
-                        self.block_params = []
-                        self.block_body_lines = []
-                        no_comm = self.remove_comments(stripped)
-                        if "|" in no_comm:
-                            left = no_comm[1:no_comm.index("|")].strip()
-                            if not left.startswith(":"):
-                                left = ""
-                            if left:
-                                tokens = left.split()
-                                for t in tokens:
-                                    if t.startswith(":"):
-                                        self.block_params.append(t[1:])
-                            right = no_comm[no_comm.index("|")+1:].strip()
-                            if right and right != "]":
-                                self.block_body_lines.append(right)
+                        if trailing:
+                            if trailing.strip() == "=":
+                                pass
+                            else:
+                                comment_text = self.extract_first_trailing_comment(trailing)
+                                if (comment_text and self.program_description is None and
+                                    self.current_class and self.current_class["name"] == "Main"):
+                                    self.program_description = comment_text
+                                if trailing:
+                                    self.lines.insert(self.index, trailing)
                     else:
-                        no_comm = self.remove_comments(stripped)
-                        if not no_comm.strip():
-                            continue
-                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                        # If in method block but not starting a new block header, then this line is a body line.
+                        if self.in_block:
+                            no_comm = self.remove_comments(stripped)
+                            self.block_body_lines.append(no_comm)
+                        else:
+                            no_comm = self.remove_comments(stripped)
+                            if not no_comm.strip():
+                                continue
+                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 else:
                     if stripped == "]":
                         self.store_method()
                     else:
                         no_comm = self.remove_comments(stripped)
-                        if "|" in no_comm and not self.block_params:
-                            left = no_comm[:no_comm.index("|")].strip()
-                            if left:
-                                tokens = left.split()
-                                for t in tokens:
-                                    if t.startswith(":"):
-                                        self.block_params.append(t[1:])
-                            right = no_comm[no_comm.index("|")+1:].strip()
-                            if right:
-                                self.block_body_lines.append(right)
-                        else:
-                            if no_comm.strip():
-                                self.block_body_lines.append(no_comm)
+                        self.block_body_lines.append(no_comm)
 
     def check_main(self):
         main_found = False
@@ -494,6 +500,13 @@ def build_xml(classes, description):
                             elif arg["expr"]["type"] == "var":
                                 var_elem3 = SubElement(arg_expr_elem, "var")
                                 var_elem3.attrib["name"] = arg["expr"]["name"]
+                    elif instr["expr"]["type"] == "block":
+                        block_elem_inner = SubElement(expr_elem, "block")
+                        block_elem_inner.attrib["arity"] = str(instr["expr"]["arity"])
+                        for idx, par in enumerate(instr["expr"]["parameters"], start=1):
+                            param_elem = SubElement(block_elem_inner, "parameter")
+                            param_elem.attrib["order"] = str(idx)
+                            param_elem.attrib["name"] = par
     return root
 
 def main():

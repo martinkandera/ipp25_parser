@@ -1,0 +1,5 @@
+class Man1 : Object {
+    run [|
+        x := 1.
+    ]
+}

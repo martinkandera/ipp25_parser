@@ -1,0 +1,6 @@
+class MyInt : Integer {}
+class Man2 : Object {
+    run [|
+        x := 1.
+    ]
+}

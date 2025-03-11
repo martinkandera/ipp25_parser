@@ -1,0 +1,5 @@
+class Main : Object {
+    run [|
+        x := MyInt2 from: 2.
+    ]
+}

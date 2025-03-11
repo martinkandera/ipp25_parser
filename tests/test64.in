@@ -1,0 +1,8 @@
+class Main : Object {
+    ru2: [:b|
+        x := b.
+    ]
+    r [|
+        x := 1.
+    ]
+}

@@ -1,0 +1,4 @@
+class Main : Object {
+    "Toto je neuzavretý komentár
+    run [| |]
+}

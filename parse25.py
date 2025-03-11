@@ -6,12 +6,23 @@ import xml.dom.minidom
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 
+# Pomocná funkcia: Kontrola, že po spätnom lomítku môže nasledovať len znak ' , \ alebo n
+# a že literál neobsahuje reálny znak nového riadku.
+def validate_string_literal(literal):
+    # Ak spätné lomítko nie je nasledované ' , \ alebo n, je to chyba.
+    if re.search(r"\\(?!['\\n])", literal):
+        sys.exit(ErrorType.LEX_ERR_INPUT.value)
+    # Ak literál obsahuje reálny znak nového riadku, nie je to povolené.
+    if "\n" in literal:
+        sys.exit(ErrorType.LEX_ERR_INPUT.value)
+
+
 class ErrorType(Enum):
     NO_ERROR = 0
     MISSING_PARAM = 10
-    LEX_ERR_INPUT = 21
-    SYN_ERR_INPUT = 22
-    SEM_IN_MAIN = 31
+    LEX_ERR_INPUT = 21  # Lexikálna chyba vo vstupnom kóde
+    SYN_ERR_INPUT = 22  # Syntaktická chyba vo vstupnom kóde
+    SEM_IN_MAIN = 31  # Chýbajúca trieda Main alebo metóda run
     SEM_UNDEFINED = 32
     SEM_MISSMATCH = 33
     SEM_COLLISION = 34
@@ -56,7 +67,7 @@ class Parser:
     def remove_comments(self, line):
         result = ""
         i = 0
-        in_single = False  # track if inside a single-quoted literal
+        in_single = False  # Sledovanie, či sme vo vnútri reťazcového literálu v jednoduchých úvodzovkách
         while i < len(line):
             ch = line[i]
             if ch == "'" and not in_single:
@@ -73,7 +84,7 @@ class Parser:
                     j += 1
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                i = j + 1  # skip comment entirely
+                i = j + 1  # komentár preskočíme
             else:
                 result += ch
                 i += 1
@@ -108,7 +119,6 @@ class Parser:
 
     def strip_parentheses(self, expr):
         expr = expr.strip()
-        # Remove outer parentheses as long as they are balanced.
         while expr.startswith("(") and expr.endswith(")") and self.check_balanced(expr[1:-1]):
             expr = expr[1:-1].strip()
         return expr
@@ -148,8 +158,12 @@ class Parser:
     def parse_expr(self, expr_str):
         expr_str = expr_str.strip()
         expr_str = self.strip_parentheses(expr_str)
-        # Check for literals
-        if re.match(r"^[+-]?\d+$", expr_str):
+        # Pravidlo: Reťazcový literál musí byť ukončený na rovnakom riadku.
+        if expr_str.startswith("'") and not expr_str.endswith("'"):
+            sys.exit(ErrorType.LEX_ERR_INPUT.value)
+        if expr_str and expr_str[0] in "+-" and not re.fullmatch(r"[+-]\d+", expr_str):
+            sys.exit(ErrorType.LEX_ERR_INPUT.value)
+        if re.fullmatch(r"[+-]?\d+", expr_str):
             return {"type": "literal", "class": "Integer", "value": expr_str}
         if expr_str == "nil":
             return {"type": "literal", "class": "Nil", "value": expr_str}
@@ -159,6 +173,10 @@ class Parser:
             return {"type": "literal", "class": "False", "value": expr_str}
         if expr_str.startswith("'") and expr_str.endswith("'"):
             value = expr_str[1:-1]
+            # Ak literál obsahuje reálny znak nového riadku, to je chyba.
+            if "\n" in value:
+                sys.exit(ErrorType.LEX_ERR_INPUT.value)
+            validate_string_literal(value)
             value = value.replace("\\'", "\\&apos;")
             value = value.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;").replace('"', "&quot;")
             return {"type": "literal", "class": "String", "value": value}
@@ -166,36 +184,44 @@ class Parser:
         if len(tokens) == 0:
             return None
         if len(tokens) == 1:
-            # Single token: assume variable.
-            return {"type": "var", "name": tokens[0]}
+            token = tokens[0]
+            if token[0].isupper():
+                if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", token):
+                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                return {"type": "literal", "class": "class", "value": token}
+            else:
+                if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", token):
+                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                return {"type": "var", "name": token}
         if len(tokens) == 2:
             receiver = tokens[0]
             selector = tokens[1]
             receiver_node = {"type": "literal", "class": "class", "value": receiver} if receiver[0].isupper() else {
                 "type": "var", "name": receiver}
             return {"type": "send", "selector": selector, "expr": receiver_node, "args": []}
-        # If tokens[1] ends with ":" then assume send expression with arguments.
-        if tokens[1].endswith(":"):
+        # Ak sú viaceré tokeny, ak je druhý token selector (končí dvojbodkou),
+        # očakávame striedanie selector, argument.
+        if len(tokens) >= 3 and tokens[1].endswith(":"):
+            if len(tokens) % 2 == 0:
+                sys.exit(ErrorType.LEX_ERR_INPUT.value)
             receiver = tokens[0]
             receiver_node = {"type": "literal", "class": "class", "value": receiver} if receiver[0].isupper() else {
                 "type": "var", "name": receiver}
             selector_parts = []
             args = []
-            i = 1
-            while i < len(tokens):
-                token = tokens[i]
-                if not token.endswith(":"):
-                    break
-                selector_parts.append(token)
+            for i in range(1, len(tokens), 2):
+                if not tokens[i].endswith(":"):
+                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                if not re.fullmatch(r"[A-Za-z0-9]+:$", tokens[i]):
+                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                selector_parts.append(tokens[i])
                 if i + 1 < len(tokens):
                     arg_node = self.parse_expr(tokens[i + 1])
                     args.append({"order": len(args) + 1, "expr": arg_node})
-                    i += 2
-                else:
-                    break
             selector = "".join(selector_parts)
             return {"type": "send", "selector": selector, "expr": receiver_node, "args": args}
-        return {"type": "literal", "class": "Unknown", "value": expr_str}
+        # Ak tokeny nedodržiavajú očakávaný formát, vyhlásime lexikálnu chybu.
+        sys.exit(ErrorType.LEX_ERR_INPUT.value)
 
     def parse_class_header(self, stripped):
         m = self.class_header_re.match(stripped)
@@ -203,6 +229,8 @@ class Parser:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         cls_name = m.group(1)
         parent = m.group(2) if m.group(2) else ""
+        if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", cls_name):
+            sys.exit(ErrorType.LEX_ERR_INPUT.value)
         remainder = m.group(3).strip()
         self.current_class = {"name": cls_name, "parent": parent, "methods": []}
         if remainder:
@@ -226,14 +254,15 @@ class Parser:
             if not m:
                 continue
             var_name = m.group(1)
+            if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", var_name):
+                sys.exit(ErrorType.LEX_ERR_INPUT.value)
             expr_str = m.group(2).strip()
             clean_expr = self.strip_parentheses(expr_str)
             if clean_expr.startswith("[") and clean_expr.endswith("]") and "|" in clean_expr:
                 param_part = clean_expr[1:clean_expr.index("|")].strip()
                 params = []
                 if param_part:
-                    tokens = param_part.split()
-                    for token in tokens:
+                    for token in param_part.split():
                         if token.startswith(":"):
                             params.append(token[1:])
                 block_node = {"type": "block", "arity": len(params), "parameters": params, "instructions": []}
@@ -241,7 +270,7 @@ class Parser:
             elif clean_expr.startswith("[") and clean_expr.endswith("]"):
                 block_node = {"type": "block", "arity": 0, "parameters": [], "instructions": []}
                 instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
-            elif integer_re.match(clean_expr):
+            elif integer_re.fullmatch(clean_expr):
                 instr = {"type": "assign", "order": order, "var": var_name,
                          "expr": {"type": "literal", "class": "Integer", "value": clean_expr}}
             elif clean_expr == "nil":
@@ -255,13 +284,14 @@ class Parser:
                          "expr": {"type": "literal", "class": "False", "value": "false"}}
             elif clean_expr.startswith("'") and clean_expr.endswith("'"):
                 value = clean_expr[1:-1]
+                validate_string_literal(value)
                 value = value.replace("\\'", "\\&apos;")
                 instr = {"type": "assign", "order": order, "var": var_name,
                          "expr": {"type": "literal", "class": "String", "value": value}}
             else:
                 node = self.parse_expr(clean_expr)
                 if node is None:
-                    node = {"type": "literal", "class": "Unknown", "value": clean_expr}
+                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 instr = {"type": "assign", "order": order, "var": var_name, "expr": node}
             instructions.append(instr)
             order += 1
@@ -335,8 +365,7 @@ class Parser:
                         if "|" in no_comm_block:
                             left = no_comm_block[1:no_comm_block.index("|")].strip()
                             if left:
-                                tokens = left.split()
-                                for t in tokens:
+                                for t in left.split():
                                     if t.startswith(":"):
                                         self.block_params.append(t[1:])
                             right = no_comm_block[no_comm_block.index("|") + 1:-1].strip()
@@ -361,8 +390,7 @@ class Parser:
                         if "|" in no_comm:
                             left = no_comm[1:no_comm.index("|")].strip()
                             if left:
-                                tokens = left.split()
-                                for t in tokens:
+                                for t in left.split():
                                     if t.startswith(":"):
                                         self.block_params.append(t[1:])
                             right = no_comm[no_comm.index("|") + 1:].strip()
@@ -381,8 +409,7 @@ class Parser:
                         if "|" in no_comm and not self.block_params:
                             left = no_comm[:no_comm.index("|")].strip()
                             if left:
-                                tokens = left.split()
-                                for t in tokens:
+                                for t in left.split():
                                     if t.startswith(":"):
                                         self.block_params.append(t[1:])
                             right = no_comm[no_comm.index("|") + 1:].strip()

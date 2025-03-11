@@ -1,0 +1,6 @@
+class Main : Object {
+    run [|
+        "abc
+        A_BH_oj := 10.
+    ]
+}

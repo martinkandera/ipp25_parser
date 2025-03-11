@@ -6,34 +6,32 @@ import xml.dom.minidom
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 
-# Pomocna funkcia: Overuje, ci retazcovy literal obsahuje len povolene escape sekvencie.
-# Povolene escape sekvencie su: \' a \\ a take este moze byt \n.
-# Ak sa spatne lomitko (backslash) vyskytne a nie je nasledovane ' , \ alebo n, skonci program s chybovym kodom 21.
+# Pomocna funkcia: Overuje, ci retazcovy literal obsahuje iba povolene escape sekvencie.
+# Povolene escape sekvencie su: \' , \\ a \n.
+# Ak spatne lomitko nie je nasledovane ' , \ alebo n, alebo literal obsahuje skutocny znak noveho riadku,
+# program skonci s chybovym kodom 21.
 def validate_string_literal(literal):
-    # Pouzijeme regularny vyraz, ktory odstrani povolene escape sekvencie a potom overime, ci nie je prilis este spatne lomitko.
     if re.search(r"\\(?!['\\n])", literal):
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
-    # Overime, ci literal neobsahuje skutocny znak noveho riadku.
     if "\n" in literal:
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
 
 
-# Definicia enumeracneho typu pre chybove kody.
+# Definicia chybovych kodov.
 class ErrorType(Enum):
     NO_ERROR = 0
     MISSING_PARAM = 10
     LEX_ERR_INPUT = 21  # Lexikalna chyba vo vstupnom kode
     SYN_ERR_INPUT = 22  # Syntakticka chyba vo vstupnom kode
     SEM_IN_MAIN = 31  # Chyba: chybaju Main trieda alebo metoda run
-    SEM_UNDEFINED = 32
+    SEM_UNDEFINED = 32  # Chyba: pouzita metoda alebo premenna nie je definovana
     SEM_MISSMATCH = 33
     SEM_COLLISION = 34
     SEM_OTHER = 35
 
 
-# Funkcia, ktora vypise napovedu a ukonci program.
+# Funkcia show_help() vypise napovedu a skonci program.
 def show_help():
-    # Vypis napovedy
     print("Skript parse25.py parsuje zdrojovy kod jazyka SOL25 zo vstupu")
     print("a generuje XML reprezentaciu programu na vystup.")
     print("Pouzitie: python3 parse25.py < input_file > output_file")
@@ -42,44 +40,43 @@ def show_help():
     sys.exit(ErrorType.NO_ERROR.value)
 
 
-# Hlavna trieda parser, ktory obsahuje vsetky metody pre lexikalnu a syntakticku analyzu vstupneho kodu.
+# Trieda Parser obsahuje vsetky metody na lexikalnu a syntakticku analyzu vstupneho kodu.
 class Parser:
-    # Regularne vyrazy pre spracovanie hlavicky triedy a hlavicky metody.
+    # Regularne vyrazy pre hlavicku triedy a hlavicku metody.
     class_header_re = re.compile(r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
     method_header_re = re.compile(r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
 
-    # Konstruktor, ktory inicializuje instanciu parsera so vstupnymi riadkami.
     def __init__(self, lines):
         self.lines = lines  # zoznam vstupnych riadkov
-        self.index = 0  # aktualny index v zozname riadkov
-        self.classes = []  # zoznam spracovanych tried
+        self.index = 0  # aktualny index v zozname
+        self.classes = []  # zoznam parsovanych tried
         self.current_class = None  # aktualne spracovavana trieda
         self.current_method = None  # aktualne spracovavana metoda
-        self.in_block = False  # ci sa spracovava blokova cast metody
-        self.block_params = []  # zoznam parametrov bloku (bez dvojtych bodiek)
+        self.in_block = False  # ci sa spracovava telo bloku
+        self.block_params = []  # parametre bloku (zoznam retezcov bez ":" pred nimi)
         self.block_body_lines = []  # riadky tela bloku
-        self.program_description = None  # popis, ktory sa ulozi z prvej metody run v Main triede
+        self.program_description = None  # popis, ktory sa z hlavicky metody run v Main ulozi
 
-    # Metoda, ktora vrati True, ak sme dosiahli koniec vstupnych riadkov.
+    # Funkcia eof() vracia True, ak sme dosiahli koniec vstupnych riadkov.
     def eof(self):
         return self.index >= len(self.lines)
 
-    # Vrati aktualny riadok (ak este nie je dosiahnuty koniec).
+    # Funkcia get_line() vrati aktualny riadok (ak este nie je EOF).
     def get_line(self):
         if self.eof():
             return None
         return self.lines[self.index]
 
-    # Posunie index o 1 (prejdeme na dalsi riadok).
+    # Funkcia advance() posunie index o 1.
     def advance(self):
         self.index += 1
 
-    # Funkcia, ktora odstrani komentarove casti (text medzi dvojitymi uvodzovkami)
-    # a vrati retazec bez tychto komentarov.
+    # Funkcia remove_comments() odstrani komentarove casti (text medzi dvojitymi uvodzovkami)
+    # a zachova retazcove literaly v jednoduchych uvodzovkach.
     def remove_comments(self, line):
         result = ""
         i = 0
-        in_single = False  # Sledovanie, ci sme vo vnutri retazcoveho literalu v jednoduchych uvodzovkach.
+        in_single = False  # Sledovanie, ci sme vo vnutri retazcoveho literalu v jednoduchych uvodzovkach
         while i < len(line):
             ch = line[i]
             if ch == "'" and not in_single:
@@ -90,22 +87,19 @@ class Parser:
                 in_single = False
                 result += ch
                 i += 1
-            # Ak nie sme v retazcovom literale a narazime na dvojite uvodzovky, ide o komentar.
             elif not in_single and ch == '"':
                 j = i + 1
-                # Preskocime vsetky znaky az po dalsie dvojite uvodzovky.
                 while j < len(line) and line[j] != '"':
                     j += 1
-                # Ak nenasli sme koniec komentara, je to chyba.
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                i = j + 1  # Preskocime komentarovu cast.
+                i = j + 1  # Preskocime komentarovu cast
             else:
                 result += ch
                 i += 1
         return result
 
-    # Funkcia, ktora z textu extrahuje prvy trailing komentar (vrati text medzi dvojitymi uvodzovkami)
+    # Funkcia extract_first_trailing_comment() extrahuje prvy trailing komentar zo vstupneho textu.
     def extract_first_trailing_comment(self, text):
         m = re.search(r'"([^"]*)"', text)
         if not m:
@@ -113,9 +107,9 @@ class Parser:
         raw_comment = m.group(1)
         return self.transform_description(raw_comment)
 
-    # Funkcia transformuje popis (description) - nahradi znaky noveho riadku a medzery podla pravidiel.
+    # Funkcia transform_description() transformuje text popisu: nahradi skutocne znaky noveho riadku
+    # a literalne "\n" specialnymi symbolmi.
     def transform_description(self, desc):
-        # Nahradime skutocne znaky noveho riadku a literalne "\n" na specialne symboly.
         desc = desc.replace('\n', '\u0001')
         desc = desc.replace(r'\n', '\u0001')
         out = []
@@ -126,8 +120,6 @@ class Parser:
                 while i < len(desc) and desc[i] == '\u0001':
                     i += 1
                 count = i - start
-                # Ak je len jeden znak noveho riadku, nahradime ho medzerou (&nbsp;),
-                # inak pouzijeme XML entitu pre newline (&#10;)
                 if count == 1:
                     out.append("&nbsp;")
                 else:
@@ -137,14 +129,14 @@ class Parser:
                 i += 1
         return "".join(out)
 
-    # Funkcia odstrani vonkajsie zatvorky, ak su vyvysene a vyvazene.
+    # Funkcia strip_parentheses() odstrani vonkajsie zatvorky, ak su vyvazene.
     def strip_parentheses(self, expr):
         expr = expr.strip()
         while expr.startswith("(") and expr.endswith(")") and self.check_balanced(expr[1:-1]):
             expr = expr[1:-1].strip()
         return expr
 
-    # Funkcia kontroluje, ci su zatvorky vyvazene.
+    # Funkcia check_balanced() kontroluje, ci su zatvorky v retazci vyvazene.
     def check_balanced(self, s):
         depth = 0
         for ch in s:
@@ -156,7 +148,7 @@ class Parser:
                     return False
         return depth == 0
 
-    # Funkcia rozdeluje retazec na tokeny, pri zachovani vnorenia zatvoriek.
+    # Funkcia tokenize() rozdeluje retazec na tokeny, pri zachovani vnorenia zatvoriek.
     def tokenize(self, s):
         tokens = []
         current = ""
@@ -178,14 +170,14 @@ class Parser:
             tokens.append(current)
         return tokens
 
-    # Funkcia parse_expr analyzuje retazec vyrazu a vrati slovnik reprezentujuci AST danej casti.
+    # Funkcia parse_expr() analyzuje vyraz a vracia AST (slovnik) reprezentujuci literal,
+    # premennu, alebo odoslanie spravy.
     def parse_expr(self, expr_str):
         expr_str = expr_str.strip()
         expr_str = self.strip_parentheses(expr_str)
-        # Pravidlo: Retazcovy literal musi byt ukonceny na tom istom riadku.
+        # Pravidlo: Reťazcovy literal musi byt ukonceny na tom istom riadku.
         if expr_str.startswith("'") and not expr_str.endswith("'"):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
-        # Kontrola ciselnich literalov s povolenymi znamienkami.
         if expr_str and expr_str[0] in "+-" and not re.fullmatch(r"[+-]\d+", expr_str):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if re.fullmatch(r"[+-]?\d+", expr_str):
@@ -202,14 +194,12 @@ class Parser:
             if "\n" in value:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             validate_string_literal(value)
-            # Nahradime escape sekvencie a specialne znaky pre XML.
             value = value.replace("\\'", "\\&apos;")
             value = value.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;").replace('"', "&quot;")
             return {"type": "literal", "class": "String", "value": value}
         tokens = self.tokenize(expr_str)
         if len(tokens) == 0:
             return None
-        # Ak je len jeden token, rozpozname ho ako triedu alebo premennu.
         if len(tokens) == 1:
             token = tokens[0]
             if token[0].isupper():
@@ -220,16 +210,14 @@ class Parser:
                 if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", token):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "var", "name": token}
-        # Ak su dva tokeny, predpokladame odoslanie spravy bez argumentov.
         if len(tokens) == 2:
             receiver = tokens[0]
             selector = tokens[1]
             receiver_node = {"type": "literal", "class": "class", "value": receiver} if receiver[0].isupper() else {
                 "type": "var", "name": receiver}
             return {"type": "send", "selector": selector, "expr": receiver_node, "args": []}
-        # Ak je viac tokenov a druhy token konci dvojbodkou, rozparsujeme spravu s argumentmi.
+        # Ak je viac tokenov a druhy token konci dvojbodkou, spracujeme odoslanie spravy s argumentmi.
         if len(tokens) > 2 and tokens[1].endswith(":"):
-            # Ak pocet tokenov je parny, je to chyba.
             if len(tokens) % 2 == 0:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             receiver = tokens[0]
@@ -237,7 +225,6 @@ class Parser:
                 "type": "var", "name": receiver}
             selector_parts = []
             args = []
-            # Spracujeme striedanie selector a argument.
             for i in range(1, len(tokens), 2):
                 if not tokens[i].endswith(":"):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
@@ -249,17 +236,15 @@ class Parser:
                     args.append({"order": len(args) + 1, "expr": arg_node})
             selector = "".join(selector_parts)
             return {"type": "send", "selector": selector, "expr": receiver_node, "args": args}
-        # Vsetky ostatne pripady su lexikalna chyba.
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
 
-    # Funkcia na parsovanie hlavicky triedy.
+    # Funkcia parse_class_header() parsuje hlavicku triedy a inicializuje current_class.
     def parse_class_header(self, stripped):
         m = self.class_header_re.match(stripped)
         if not m:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         cls_name = m.group(1)
         parent = m.group(2) if m.group(2) else ""
-        # Overime, ci nazov triedy vyhovuje pravidlu (prvy znak velke pismeno)
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", cls_name):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         remainder = m.group(3).strip()
@@ -267,7 +252,7 @@ class Parser:
         if remainder:
             self.lines.insert(self.index, remainder)
 
-    # Funkcia na parsovanie hlavicky metody.
+    # Funkcia parse_method_header() parsuje hlavicku metody a vracia dvojicu (selector, description).
     def parse_method_header(self, stripped):
         mm = self.method_header_re.match(stripped)
         if not mm:
@@ -276,14 +261,13 @@ class Parser:
         desc = mm.group(2) if mm.group(2) else ""
         return (selector, desc)
 
-    # Funkcia na parsovanie instrukcii v tele bloku metody.
+    # Funkcia parse_block_instructions() parsuje instrukcie v tele bloku.
+    # Pred spracovanim kazdeho riadku kontroluje, ci je parny pocet jednoduchych uvodzoviek.
     def parse_block_instructions(self, lines_in_block):
         instructions = []
         order = 1
-        # Regularny vyraz pre priradenie: identifikator := vyraz.
         assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$")
         integer_re = re.compile(r"^[+-]?\d+$")
-        # Pred parsovanim kazdeho riadku kontrolujeme, ci ma parny pocet jednoduchych uvodzoviek.
         for line in lines_in_block:
             if line.count("'") % 2 != 0:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
@@ -292,12 +276,10 @@ class Parser:
             if not m:
                 continue
             var_name = m.group(1)
-            # Overime, ci nazov premennej vyhovuje pravidlu.
             if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", var_name):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             expr_str = m.group(2).strip()
             clean_expr = self.strip_parentheses(expr_str)
-            # Ak ide o blokovy literal s parametrami (obsahuje "|" symbol)
             if clean_expr.startswith("[") and clean_expr.endswith("]") and "|" in clean_expr:
                 param_part = clean_expr[1:clean_expr.index("|")].strip()
                 params = []
@@ -307,15 +289,12 @@ class Parser:
                             params.append(token[1:])
                 block_node = {"type": "block", "arity": len(params), "parameters": params, "instructions": []}
                 instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
-            # Ak ide o blokovy literal bez parametrov.
             elif clean_expr.startswith("[") and clean_expr.endswith("]"):
                 block_node = {"type": "block", "arity": 0, "parameters": [], "instructions": []}
                 instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
-            # Ak ide o ciselný literal.
             elif integer_re.fullmatch(clean_expr):
                 instr = {"type": "assign", "order": order, "var": var_name,
                          "expr": {"type": "literal", "class": "Integer", "value": clean_expr}}
-            # Ak literal je nil, true alebo false.
             elif clean_expr == "nil":
                 instr = {"type": "assign", "order": order, "var": var_name,
                          "expr": {"type": "literal", "class": "Nil", "value": "nil"}}
@@ -325,7 +304,6 @@ class Parser:
             elif clean_expr == "false":
                 instr = {"type": "assign", "order": order, "var": var_name,
                          "expr": {"type": "literal", "class": "False", "value": "false"}}
-            # Ak ide o retazcovy literal.
             elif clean_expr.startswith("'") and clean_expr.endswith("'"):
                 value = clean_expr[1:-1]
                 validate_string_literal(value)
@@ -333,7 +311,6 @@ class Parser:
                 instr = {"type": "assign", "order": order, "var": var_name,
                          "expr": {"type": "literal", "class": "String", "value": value}}
             else:
-                # Inak sa pokusime o parsovanie vyrazu.
                 node = self.parse_expr(clean_expr)
                 if node is None:
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
@@ -342,7 +319,7 @@ class Parser:
             order += 1
         return instructions
 
-    # Funkcia ulozi spracovanu metodu do aktualnej triedy a resetuje pomocne premenne.
+    # Funkcia store_method() ulozi aktualnu metodu do current_class a resetuje pomocne premenne.
     def store_method(self):
         if not self.current_method:
             return
@@ -350,42 +327,35 @@ class Parser:
         block = {"arity": len(self.block_params), "parameters": self.block_params, "instructions": instructions}
         self.current_method["block"] = block
         self.current_class["methods"].append(self.current_method)
-        # Resetujeme premenne pre dalsiu metodu.
         self.current_method = None
         self.in_block = False
         self.block_params = []
         self.block_body_lines = []
 
-    # Hlavna metoda parsovania, ktora prechadza vsetky vstupne riadky a parsuje triedy, metody a bloky.
+    # Funkcia parse_main() prechadza vsetky vstupne riadky a parsuje triedy, metody a bloky.
     def parse_main(self):
         while not self.eof():
             line = self.get_line()
             self.advance()
             if not line.strip():
                 continue
-            # Ak este nebola parsovana trieda, pokusime sa o parsovanie triedy.
             if self.current_class is None:
                 self.parse_class_header(line.strip())
             else:
                 stripped = line.strip()
-                # Ak riadok zacina zatvorkou "}", znamena to koniec triedy.
                 if stripped.startswith("}"):
                     self.classes.append(self.current_class)
                     self.current_class = None
                     continue
-                # Parsovanie hlavicky metody, ak nie je v bloku.
                 if self.current_method is None and not self.in_block:
                     m_head = self.parse_method_header(stripped)
                     if m_head:
                         selector, desc = m_head
                         self.current_method = {"selector": selector, "description": desc}
-                        # Ak ide o metodu run v triede Main a ma popis, ulozime ho.
                         if self.current_class["name"] == "Main" and selector == "run" and desc:
                             self.program_description = self.transform_description(desc)
                         continue
                     else:
-                        # Ak hlavicka metody nie je na tomto riadku, ale riadok obsahuje "[",
-                        # pokusime sa parsovat hlavicku metody z casti riadku pred "[".
                         if "[" in stripped:
                             idx = stripped.find("[")
                             header_part = stripped[:idx].strip()
@@ -406,7 +376,6 @@ class Parser:
                             if not no_comm.strip():
                                 continue
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                # Parsovanie tela bloku.
                 if not self.in_block:
                     if "[" in stripped and "]" in stripped:
                         idx_open = stripped.find("[")
@@ -416,7 +385,6 @@ class Parser:
                         self.in_block = True
                         self.block_params = []
                         self.block_body_lines = []
-                        # Odstranime komentare z bloku.
                         no_comm_block = self.remove_comments(block_literal)
                         if "|" in no_comm_block:
                             left = no_comm_block[1:no_comm_block.index("|")].strip()
@@ -475,7 +443,7 @@ class Parser:
                             if no_comm.strip():
                                 self.block_body_lines.append(no_comm)
 
-    # Funkcia, ktora skontroluje, ci bola deklarovana trieda Main a metoda run.
+    # Funkcia check_main() overuje, ci bola deklarovana trieda Main a metoda run.
     def check_main(self):
         main_found = False
         run_found = False
@@ -491,7 +459,80 @@ class Parser:
             sys.exit(ErrorType.SEM_IN_MAIN.value)
 
 
-# Funkcia, ktora vytvori XML vystup z parsovanych tried a metod.
+# Semanticka kontrola - overuje definovane metody a inicializaciu premennych.
+# Tento kod buduje tabulku tried s metodami (vratane built-in tried: Integer, String, Object)
+# a prechadza kazdu metodu, overujuci, ci v send vyrazoch s literalnym receiverom (typ "class")
+# existuje volana metoda a ci su pouzite premenne inicializovane.
+def semantic_check(classes):
+    # Definujeme built-in triedy a ich povolene metody
+    builtin = {
+        "Integer": {"from:", "new", "plus:"},
+        "String": {"plus:"},
+        "Object": set()
+    }
+    class_methods = {}
+    # Najprv vlozime built-in triedy
+    for k, v in builtin.items():
+        class_methods[k] = set(v)
+    # Pre kazdu pouzivanu triedu (user-defined), ak nie je v built-in, inicializujeme prazdnym mnozinou
+    for cls in classes:
+        if cls["name"] not in class_methods:
+            class_methods[cls["name"]] = set()
+        for m in cls["methods"]:
+            class_methods[cls["name"]].add(m["selector"])
+    # Propagujeme dedenie - ak trieda ma rodica, pridame aj rodicove metody
+    changed = True
+    while changed:
+        changed = False
+        for cls in classes:
+            if cls["parent"]:
+                parent = cls["parent"]
+                if parent in class_methods:
+                    before = len(class_methods[cls["name"]])
+                    class_methods[cls["name"]].update(class_methods[parent])
+                    if len(class_methods[cls["name"]]) > before:
+                        changed = True
+
+    # Funkcia na semanticku kontrolu vyrazu (kontrola pouzitia premennych a metod)
+    def check_expr(expr, defined_vars):
+        if expr["type"] == "literal":
+            # Literal nema premennu, kontrola metody sa vykonava v send vyrazoch
+            return
+        elif expr["type"] == "var":
+            # Overime, ci pouzita premenna bola inicializovana
+            if expr["name"] not in defined_vars:
+                sys.exit(ErrorType.SEM_UNDEFINED.value)
+        elif expr["type"] == "send":
+            # Skontrolujeme receiver
+            rec = expr["expr"]
+            if rec["type"] == "literal" and rec.get("class") == "class":
+                cls_name = rec["value"]
+                if cls_name not in class_methods or expr["selector"] not in class_methods[cls_name]:
+                    sys.exit(ErrorType.SEM_UNDEFINED.value)
+            else:
+                check_expr(rec, defined_vars)
+            # Skontrolujeme argumenty
+            for arg in expr.get("args", []):
+                check_expr(arg["expr"], defined_vars)
+        elif expr["type"] == "block":
+            # Pre block, parametre su inicializovane
+            new_defined = set(expr.get("parameters", []))
+            # Ak by sme mali vnoreny block s instrukciami, kontrolovali by sme ich samostatne
+            return
+
+    # Pre kazdu metodu v kazdej triede prejdeme instrukcie v bloku a overime pouzitie premennych.
+    for cls in classes:
+        for m in cls["methods"]:
+            # Inicializovane premenne su parametre bloku a "self"
+            defined = set(m["block"].get("parameters", []))
+            defined.add("self")
+            for instr in m["block"].get("instructions", []):
+                check_expr(instr["expr"], defined)
+                # Priradenie definue premennej na lavu stranu
+                defined.add(instr["var"])
+
+
+# Funkcia build_xml() vytvori XML strom zo semanticky parsovanych dat.
 def build_xml(classes, description):
     root = Element("program")
     root.attrib["language"] = "SOL25"
@@ -558,33 +599,31 @@ def build_xml(classes, description):
     return root
 
 
-# Hlavna funkcia programu
+# Hlavna funkcia main() - nacita vstup, spusti parsovanie, vykona semanticku kontrolu,
+# vybuduje XML vystup a vypise ho.
 def main():
-    # Overenie parametrov príkazovej riadky
     if len(sys.argv) != 1:
         if len(sys.argv) == 2 and sys.argv[1] == "--help":
             show_help()
         else:
             print("Neznamy parameter alebo zakazana kombinacia parametrov.", file=sys.stderr)
             sys.exit(ErrorType.MISSING_PARAM.value)
-    # Nacitanie vstupnych riadkov zo standardneho vstupu
     lines = sys.stdin.read().splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
     if not lines:
         sys.exit(ErrorType.SEM_IN_MAIN.value)
-    # Vytvorenie instance parsera a spustenie parsovania
     parser = Parser(lines)
     parser.parse_main()
     if parser.current_class is not None or parser.in_block or parser.current_method is not None:
         sys.exit(ErrorType.SYN_ERR_INPUT.value)
     parser.check_main()
-    # Vybudovanie XML vystupu z parsovanych dat
+    # Semanticka kontrola: overi undefined metody a neinicializovane premenne.
+    semantic_check(parser.classes)
     root = build_xml(parser.classes, parser.program_description)
     dom = xml.dom.minidom.parseString(tostring(root, encoding="utf-8"))
     pretty_xml = dom.toprettyxml(indent="    ", encoding="UTF-8")
     pretty_str = pretty_xml.decode("utf-8")
-    # Nahradime niektore XML entity pre korektny vystup
     pretty_str = pretty_str.replace("&amp;#10;", "&#10;")
     pretty_str = pretty_str.replace("&amp;nbsp;", "&nbsp;")
     pretty_str = pretty_str.replace("&amp;apos;", "&apos;")
@@ -592,5 +631,72 @@ def main():
     sys.stdout.write(pretty_str)
 
 
+# Funkcia semantic_check() vykonava semanticku kontrolu:
+# 1. Vytvori tabulku metod pre vsetky triedy (vratane built-in: Integer, String, Object).
+# 2. Propaguje dedenie a overuje, ci su volane metody definovane.
+# 3. Prechadza instrukcie v kazdej metode a kontroluje, ci su pouzite premenne inicializovane.
+def semantic_check(classes):
+    # Definujeme built-in triedy a povolene metody
+    builtin = {
+        "Integer": {"from:", "new", "plus:"},
+        "String": {"plus:"},
+        "Object": set()
+    }
+    class_methods = {}
+    # Inicializujeme tabulku s built-in triedami
+    for k, v in builtin.items():
+        class_methods[k] = set(v)
+    # Pre kazdu pouzivanu triedu (user-defined) pridame metody z parsovaneho kodu
+    for cls in classes:
+        if cls["name"] not in class_methods:
+            class_methods[cls["name"]] = set()
+        for m in cls["methods"]:
+            class_methods[cls["name"]].add(m["selector"])
+    # Propagujeme dedenie: ak trieda ma rodica, jej metody su union rodicovych metod
+    changed = True
+    while changed:
+        changed = False
+        for cls in classes:
+            if cls["parent"]:
+                parent = cls["parent"]
+                if parent in class_methods:
+                    before = len(class_methods[cls["name"]])
+                    class_methods[cls["name"]].update(class_methods[parent])
+                    if len(class_methods[cls["name"]]) > before:
+                        changed = True
+
+    # Funkcia check_expr() rekurzivne kontroluje vyraz a overuje pouzitie premennych
+    # a volanie metod. Ak receiver je literal triedy, overi, ci metoda existuje.
+    def check_expr(expr, defined_vars):
+        if expr["type"] == "literal":
+            return
+        elif expr["type"] == "var":
+            if expr["name"] not in defined_vars:
+                sys.exit(ErrorType.SEM_UNDEFINED.value)
+        elif expr["type"] == "send":
+            rec = expr["expr"]
+            if rec["type"] == "literal" and rec.get("class") == "class":
+                cls_name = rec["value"]
+                if cls_name not in class_methods or expr["selector"] not in class_methods[cls_name]:
+                    sys.exit(ErrorType.SEM_UNDEFINED.value)
+            else:
+                check_expr(rec, defined_vars)
+            for arg in expr.get("args", []):
+                check_expr(arg["expr"], defined_vars)
+        elif expr["type"] == "block":
+            new_defined = set(expr.get("parameters", []))
+            return
+
+    # Kontrola kazdej metody v kazdej triede pre pouzitie premennych.
+    for cls in classes:
+        for m in cls["methods"]:
+            defined = set(m["block"].get("parameters", []))
+            defined.add("self")
+            for instr in m["block"].get("instructions", []):
+                check_expr(instr["expr"], defined)
+                defined.add(instr["var"])
+
+
+# Spustenie hlavnej funkcie main().
 if __name__ == "__main__":
     main()

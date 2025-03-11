@@ -1,5 +1,5 @@
 class Main : Object {
     run [|
-        x := y.
+        x := String b.
     ]
 }

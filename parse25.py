@@ -553,7 +553,33 @@ def semantic_check(classes):
                 defined.add(instr["var"])
 
 
-# Funkcia build_xml() vytvori XML strom zo semanticky parsovanych dat.
+def build_expr_xml(expr, parent):
+    if expr["type"] == "literal":
+        lit_elem = SubElement(parent, "literal")
+        lit_elem.attrib["class"] = expr["class"]
+        lit_elem.attrib["value"] = expr["value"]
+    elif expr["type"] == "var":
+        var_elem = SubElement(parent, "var")
+        var_elem.attrib["name"] = expr["name"]
+    elif expr["type"] == "send":
+        send_elem = SubElement(parent, "send")
+        send_elem.attrib["selector"] = expr["selector"]
+        inner_expr_elem = SubElement(send_elem, "expr")
+        build_expr_xml(expr["expr"], inner_expr_elem)
+        for arg in expr.get("args", []):
+            arg_elem = SubElement(send_elem, "arg")
+            arg_elem.attrib["order"] = str(arg["order"])
+            arg_expr_elem = SubElement(arg_elem, "expr")
+            build_expr_xml(arg["expr"], arg_expr_elem)
+    elif expr["type"] == "block":
+        block_elem = SubElement(parent, "block")
+        block_elem.attrib["arity"] = str(expr["arity"])
+        for idx, par in enumerate(expr["parameters"], start=1):
+            param_elem = SubElement(block_elem, "parameter")
+            param_elem.attrib["order"] = str(idx)
+            param_elem.attrib["name"] = par
+
+# Modified build_xml using build_expr_xml for expressions.
 def build_xml(classes, description):
     root = Element("program")
     root.attrib["language"] = "SOL25"
@@ -577,47 +603,11 @@ def build_xml(classes, description):
             for instr in block.get("instructions", []):
                 if instr["type"] == "assign":
                     assign_elem = SubElement(block_elem, "assign")
-                    print(assign_elem, instr["order"], file=sys.stderr)
                     assign_elem.attrib["order"] = str(instr["order"])
                     var_elem = SubElement(assign_elem, "var")
                     var_elem.attrib["name"] = instr["var"]
                     expr_elem = SubElement(assign_elem, "expr")
-                    if instr["expr"]["type"] == "literal":
-                        lit_elem = SubElement(expr_elem, "literal")
-                        lit_elem.attrib["class"] = instr["expr"]["class"]
-                        lit_elem.attrib["value"] = instr["expr"]["value"]
-                    elif instr["expr"]["type"] == "var":
-                        var2_elem = SubElement(expr_elem, "var")
-                        var2_elem.attrib["name"] = instr["expr"]["name"]
-                    elif instr["expr"]["type"] == "send":
-                        send_elem = SubElement(expr_elem, "send")
-                        send_elem.attrib["selector"] = instr["expr"]["selector"]
-                        inner_expr_elem = SubElement(send_elem, "expr")
-                        if instr["expr"]["expr"]["type"] == "literal":
-                            lit_elem = SubElement(inner_expr_elem, "literal")
-                            lit_elem.attrib["class"] = instr["expr"]["expr"]["class"]
-                            lit_elem.attrib["value"] = instr["expr"]["expr"]["value"]
-                        elif instr["expr"]["expr"]["type"] == "var":
-                            var_elem2 = SubElement(inner_expr_elem, "var")
-                            var_elem2.attrib["name"] = instr["expr"]["expr"]["name"]
-                        for arg in instr["expr"].get("args", []):
-                            arg_elem = SubElement(send_elem, "arg")
-                            arg_elem.attrib["order"] = str(arg["order"])
-                            arg_expr_elem = SubElement(arg_elem, "expr")
-                            if arg["expr"]["type"] == "literal":
-                                lit_elem = SubElement(arg_expr_elem, "literal")
-                                lit_elem.attrib["class"] = arg["expr"]["class"]
-                                lit_elem.attrib["value"] = arg["expr"]["value"]
-                            elif arg["expr"]["type"] == "var":
-                                var_elem3 = SubElement(arg_expr_elem, "var")
-                                var_elem3.attrib["name"] = arg["expr"]["name"]
-                    elif instr["expr"]["type"] == "block":
-                        block_elem_inner = SubElement(expr_elem, "block")
-                        block_elem_inner.attrib["arity"] = str(instr["expr"]["arity"])
-                        for idx, par in enumerate(instr["expr"]["parameters"], start=1):
-                            param_elem = SubElement(block_elem_inner, "parameter")
-                            param_elem.attrib["order"] = str(idx)
-                            param_elem.attrib["name"] = par
+                    build_expr_xml(instr["expr"], expr_elem)
     return root
 
 
@@ -643,7 +633,7 @@ def main():
     # Semanticka kontrola: overi undefined metody a neinicializovane premenne.
     semantic_check(parser.classes)
     root = build_xml(parser.classes, parser.program_description)
-    print(root, file=sys.stderr)
+    #print(root, file=sys.stderr)
     dom = xml.dom.minidom.parseString(tostring(root, encoding="utf-8"))
     pretty_xml = dom.toprettyxml(indent="    ", encoding="UTF-8")
     pretty_str = pretty_xml.decode("utf-8")

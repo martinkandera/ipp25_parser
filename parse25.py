@@ -7,14 +7,29 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 
 
 # Pomocna funkcia: Overuje, ci retazcovy literal obsahuje iba povolene escape sekvencie.
-# Povolene escape sekvencie su: \' , \\ a \n.
-# Ak spatne lomitko nie je nasledovane ' , \ alebo n, alebo literal obsahuje skutocny znak noveho riadku,
-# program skonci s chybovym kodom 21.
+# Povolene escape sekvencie su: \' a \\.
+# Ak spatne lomitko nie je nasledovane iba znakmi ' alebo \, alebo literal obsahuje skutocny znak noveho riadku,
+# alebo obsahuje retazec "\n", program skonci s chybovym kodom 21.
 def validate_string_literal(literal):
-    if re.search(r"\\(?!['\\n])", literal):
-        sys.exit(ErrorType.LEX_ERR_INPUT.value)
-    if "\n" in literal:
-        sys.exit(ErrorType.LEX_ERR_INPUT.value)
+    # Prejdeme literal znak po znaku
+    i = 0
+    while i < len(literal):
+        # Overime, ci literal neobsahuje skutocny znak noveho riadku
+        if literal[i] == "\n":
+            sys.exit(ErrorType.LEX_ERR_INPUT.value)
+        # Ak narazime na spatne lomitko
+        if literal[i] == "\\":
+            # Ak spatne lomitko je posledny znak, chyba
+            if i + 1 >= len(literal):
+                sys.exit(ErrorType.LEX_ERR_INPUT.value)
+            next_char = literal[i + 1]
+            # Povolene su iba escapovane apostrofy alebo escapovane spatne lomitka
+            if next_char not in ["'", "\\"]:
+                sys.exit(ErrorType.LEX_ERR_INPUT.value)
+            # Preskocime nasledujuci znak, pretoze je castou escape sekvencie
+            i += 2
+        else:
+            i += 1
 
 
 # Definicia chybovych kodov.
@@ -24,7 +39,7 @@ class ErrorType(Enum):
     LEX_ERR_INPUT = 21  # Lexikalna chyba vo vstupnom kode
     SYN_ERR_INPUT = 22  # Syntakticka chyba vo vstupnom kode
     SEM_IN_MAIN = 31  # Chyba: chybaju Main trieda alebo metoda run
-    SEM_UNDEFINED = 32  # Chyba: pouzita metoda alebo premenna nie je definovana
+    SEM_UNDEFINED = 32  # Chyba: pouzita trieda, metoda alebo premenna nie je definovana
     SEM_MISSMATCH = 33
     SEM_COLLISION = 34
     SEM_OTHER = 35
@@ -40,7 +55,7 @@ def show_help():
     sys.exit(ErrorType.NO_ERROR.value)
 
 
-# Trieda Parser obsahuje vsetky metody na lexikalnu a syntakticku analyzu vstupneho kodu.
+# Trieda Parser obsahuje metody na lexikalnu a syntakticku analyzu vstupneho kodu.
 class Parser:
     # Regularne vyrazy pre hlavicku triedy a hlavicku metody.
     class_header_re = re.compile(r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
@@ -53,15 +68,15 @@ class Parser:
         self.current_class = None  # aktualne spracovavana trieda
         self.current_method = None  # aktualne spracovavana metoda
         self.in_block = False  # ci sa spracovava telo bloku
-        self.block_params = []  # parametre bloku (zoznam retezcov bez ":" pred nimi)
+        self.block_params = []  # parametre bloku (zoznam retezcov bez dvojtych bodiek)
         self.block_body_lines = []  # riadky tela bloku
-        self.program_description = None  # popis, ktory sa z hlavicky metody run v Main ulozi
+        self.program_description = None  # popis ulozeny z hlavicky metody run v triede Main
 
     # Funkcia eof() vracia True, ak sme dosiahli koniec vstupnych riadkov.
     def eof(self):
         return self.index >= len(self.lines)
 
-    # Funkcia get_line() vrati aktualny riadok (ak este nie je EOF).
+    # Funkcia get_line() vrati aktualny riadok.
     def get_line(self):
         if self.eof():
             return None
@@ -136,7 +151,7 @@ class Parser:
             expr = expr[1:-1].strip()
         return expr
 
-    # Funkcia check_balanced() kontroluje, ci su zatvorky v retazci vyvazene.
+    # Funkcia check_balanced() kontroluje, ci su zatvorky vyvazene.
     def check_balanced(self, s):
         depth = 0
         for ch in s:
@@ -149,6 +164,7 @@ class Parser:
         return depth == 0
 
     # Funkcia tokenize() rozdeluje retazec na tokeny, pri zachovani vnorenia zatvoriek.
+    # Doplneny kod: Ak token obsahuje dvojbodku nasledovanu dalsim textom, rozdelime ho.
     def tokenize(self, s):
         tokens = []
         current = ""
@@ -168,14 +184,23 @@ class Parser:
                 current += ch
         if current:
             tokens.append(current)
-        return tokens
+        # Doplneny krok: Rozdelime tokeny, ktore obsahuju dvojbodku a nasledujuci text
+        final_tokens = []
+        for token in tokens:
+            m = re.fullmatch(r"([A-Za-z0-9]+:)(.+)", token)
+            if m:
+                final_tokens.append(m.group(1))
+                final_tokens.append(m.group(2))
+            else:
+                final_tokens.append(token)
+        return final_tokens
 
     # Funkcia parse_expr() analyzuje vyraz a vracia AST (slovnik) reprezentujuci literal,
     # premennu, alebo odoslanie spravy.
     def parse_expr(self, expr_str):
         expr_str = expr_str.strip()
         expr_str = self.strip_parentheses(expr_str)
-        # Pravidlo: Reťazcovy literal musi byt ukonceny na tom istom riadku.
+        # Pravidlo: Retazcovy literal musi byt ukonceny na tom istom riadku.
         if expr_str.startswith("'") and not expr_str.endswith("'"):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if expr_str and expr_str[0] in "+-" and not re.fullmatch(r"[+-]\d+", expr_str):
@@ -245,6 +270,7 @@ class Parser:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         cls_name = m.group(1)
         parent = m.group(2) if m.group(2) else ""
+        # Overime, ci nazov triedy zacina velkym pismenom.
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", cls_name):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         remainder = m.group(3).strip()
@@ -262,15 +288,17 @@ class Parser:
         return (selector, desc)
 
     # Funkcia parse_block_instructions() parsuje instrukcie v tele bloku.
-    # Pred spracovanim kazdeho riadku kontroluje, ci je parny pocet jednoduchych uvodzoviek.
+    # Pred spracovanim kazdeho riadku kontroluje, ci ma parny pocet jednoduchych uvodzoviek.
     def parse_block_instructions(self, lines_in_block):
         instructions = []
         order = 1
         assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$")
         integer_re = re.compile(r"^[+-]?\d+$")
+        # Pred parsovanim kazdeho riadku overime parny pocet uvodzoviek.
         for line in lines_in_block:
-            if line.count("'") % 2 != 0:
+            if (line.count("'") - line.count("\\\'") )  != 0 and (line.count("'") - line.count("\\\'") )  != 2:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
+
         for line in lines_in_block:
             m = assign_re.match(line.strip())
             if not m:
@@ -459,28 +487,29 @@ class Parser:
             sys.exit(ErrorType.SEM_IN_MAIN.value)
 
 
-# Semanticka kontrola - overuje definovane metody a inicializaciu premennych.
-# Tento kod buduje tabulku tried s metodami (vratane built-in tried: Integer, String, Object)
-# a prechadza kazdu metodu, overujuci, ci v send vyrazoch s literalnym receiverom (typ "class")
-# existuje volana metoda a ci su pouzite premenne inicializovane.
+# Semanticka kontrola: overuje definovane metody a inicializaciu premennych.
+# Tiez kontroluje, ci su definovane vsetky rodicovske triedy (super triedy) pre user-defined triedy.
 def semantic_check(classes):
-    # Definujeme built-in triedy a ich povolene metody
+    # Definujeme built-in triedy a povolene metody.
     builtin = {
         "Integer": {"from:", "new", "plus:"},
         "String": {"plus:"},
         "Object": set()
     }
     class_methods = {}
-    # Najprv vlozime built-in triedy
+    # Inicializujeme tabulku s built-in triedami.
     for k, v in builtin.items():
         class_methods[k] = set(v)
-    # Pre kazdu pouzivanu triedu (user-defined), ak nie je v built-in, inicializujeme prazdnym mnozinou
+    # Pre kazdu pouzivanu triedu (user-defined) pridame metody z parsovaneho kodu.
     for cls in classes:
+        # Ak trieda ma rodica, overime, ci rodic existuje.
+        if cls["parent"] and cls["parent"] not in class_methods:
+            sys.exit(ErrorType.SEM_UNDEFINED.value)
         if cls["name"] not in class_methods:
             class_methods[cls["name"]] = set()
         for m in cls["methods"]:
             class_methods[cls["name"]].add(m["selector"])
-    # Propagujeme dedenie - ak trieda ma rodica, pridame aj rodicove metody
+    # Propagujeme dedenie: ak trieda ma rodica, pridame rodicove metody.
     changed = True
     while changed:
         changed = False
@@ -493,17 +522,14 @@ def semantic_check(classes):
                     if len(class_methods[cls["name"]]) > before:
                         changed = True
 
-    # Funkcia na semanticku kontrolu vyrazu (kontrola pouzitia premennych a metod)
+    # Funkcia check_expr() rekurzivne kontroluje vyraz a overuje pouzitie premennych a volanie metod.
     def check_expr(expr, defined_vars):
         if expr["type"] == "literal":
-            # Literal nema premennu, kontrola metody sa vykonava v send vyrazoch
             return
         elif expr["type"] == "var":
-            # Overime, ci pouzita premenna bola inicializovana
             if expr["name"] not in defined_vars:
                 sys.exit(ErrorType.SEM_UNDEFINED.value)
         elif expr["type"] == "send":
-            # Skontrolujeme receiver
             rec = expr["expr"]
             if rec["type"] == "literal" and rec.get("class") == "class":
                 cls_name = rec["value"]
@@ -511,24 +537,19 @@ def semantic_check(classes):
                     sys.exit(ErrorType.SEM_UNDEFINED.value)
             else:
                 check_expr(rec, defined_vars)
-            # Skontrolujeme argumenty
             for arg in expr.get("args", []):
                 check_expr(arg["expr"], defined_vars)
         elif expr["type"] == "block":
-            # Pre block, parametre su inicializovane
             new_defined = set(expr.get("parameters", []))
-            # Ak by sme mali vnoreny block s instrukciami, kontrolovali by sme ich samostatne
             return
 
-    # Pre kazdu metodu v kazdej triede prejdeme instrukcie v bloku a overime pouzitie premennych.
+    # Pre kazdu metodu v kazdej triede kontrolujeme pouzitie premennych.
     for cls in classes:
         for m in cls["methods"]:
-            # Inicializovane premenne su parametre bloku a "self"
             defined = set(m["block"].get("parameters", []))
             defined.add("self")
             for instr in m["block"].get("instructions", []):
                 check_expr(instr["expr"], defined)
-                # Priradenie definue premennej na lavu stranu
                 defined.add(instr["var"])
 
 
@@ -556,6 +577,7 @@ def build_xml(classes, description):
             for instr in block.get("instructions", []):
                 if instr["type"] == "assign":
                     assign_elem = SubElement(block_elem, "assign")
+                    print(assign_elem, instr["order"], file=sys.stderr)
                     assign_elem.attrib["order"] = str(instr["order"])
                     var_elem = SubElement(assign_elem, "var")
                     var_elem.attrib["name"] = instr["var"]
@@ -612,7 +634,7 @@ def main():
     while lines and not lines[0].strip():
         lines.pop(0)
     if not lines:
-        sys.exit(ErrorType.SEM_IN_MAIN.value)
+        sys.exit(ErrorType.SEM_IN_MAIN.value)  # Ked je prazdny vstup, chyba SEM_IN_MAIN
     parser = Parser(lines)
     parser.parse_main()
     if parser.current_class is not None or parser.in_block or parser.current_method is not None:
@@ -621,6 +643,7 @@ def main():
     # Semanticka kontrola: overi undefined metody a neinicializovane premenne.
     semantic_check(parser.classes)
     root = build_xml(parser.classes, parser.program_description)
+    print(root, file=sys.stderr)
     dom = xml.dom.minidom.parseString(tostring(root, encoding="utf-8"))
     pretty_xml = dom.toprettyxml(indent="    ", encoding="UTF-8")
     pretty_str = pretty_xml.decode("utf-8")
@@ -632,27 +655,31 @@ def main():
 
 
 # Funkcia semantic_check() vykonava semanticku kontrolu:
-# 1. Vytvori tabulku metod pre vsetky triedy (vratane built-in: Integer, String, Object).
+# 1. Vytvori tabulku metod pre vsetky triedy (vratane built-in tried: Integer, String, Object).
 # 2. Propaguje dedenie a overuje, ci su volane metody definovane.
-# 3. Prechadza instrukcie v kazdej metode a kontroluje, ci su pouzite premenne inicializovane.
+# 3. Overuje, ci su definovane vsetky rodicovske triedy pre user-defined triedy.
+# 4. Prechadza instrukcie v kazdej metode a kontroluje, ci su pouzite premenne inicializovane.
 def semantic_check(classes):
-    # Definujeme built-in triedy a povolene metody
+    # Definujeme built-in triedy a povolene metody.
     builtin = {
         "Integer": {"from:", "new", "plus:"},
         "String": {"plus:"},
         "Object": set()
     }
     class_methods = {}
-    # Inicializujeme tabulku s built-in triedami
+    # Inicializujeme tabulku s built-in triedami.
     for k, v in builtin.items():
         class_methods[k] = set(v)
-    # Pre kazdu pouzivanu triedu (user-defined) pridame metody z parsovaneho kodu
+    # Pre kazdu pouzivanu triedu (user-defined) pridame metody z parsovaneho kodu.
     for cls in classes:
+        # Ak trieda ma rodica, overime, ci rodic existuje.
+        if cls["parent"] and cls["parent"] not in class_methods:
+            sys.exit(ErrorType.SEM_UNDEFINED.value)
         if cls["name"] not in class_methods:
             class_methods[cls["name"]] = set()
         for m in cls["methods"]:
             class_methods[cls["name"]].add(m["selector"])
-    # Propagujeme dedenie: ak trieda ma rodica, jej metody su union rodicovych metod
+    # Propagujeme dedenie: ak trieda ma rodica, pridame rodicove metody.
     changed = True
     while changed:
         changed = False
@@ -665,8 +692,7 @@ def semantic_check(classes):
                     if len(class_methods[cls["name"]]) > before:
                         changed = True
 
-    # Funkcia check_expr() rekurzivne kontroluje vyraz a overuje pouzitie premennych
-    # a volanie metod. Ak receiver je literal triedy, overi, ci metoda existuje.
+    # Funkcia check_expr() rekurzivne kontroluje vyraz a overuje pouzitie premennych a volanie metod.
     def check_expr(expr, defined_vars):
         if expr["type"] == "literal":
             return
@@ -687,7 +713,7 @@ def semantic_check(classes):
             new_defined = set(expr.get("parameters", []))
             return
 
-    # Kontrola kazdej metody v kazdej triede pre pouzitie premennych.
+    # Pre kazdu metodu v kazdej triede kontrolujeme pouzitie premennych.
     for cls in classes:
         for m in cls["methods"]:
             defined = set(m["block"].get("parameters", []))

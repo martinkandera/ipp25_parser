@@ -470,7 +470,6 @@ class Parser:
         self.block_params = []
         self.block_body_lines = []
 
-    # Funkcia parse_main() prechadza vsetky vstupne riadky a parsuje triedy, metody a bloky.
     def parse_main(self):
         while not self.eof():
             line = self.get_line()
@@ -568,8 +567,9 @@ class Parser:
                         self.store_method()
                     else:
                         no_comm = self.remove_comments(stripped)
-                        if "|" in no_comm and not self.block_params:
-                            left = no_comm[:no_comm.index("|")].strip()
+                        # Only treat as a block header if the line starts with '['.
+                        if no_comm.lstrip().startswith("[") and "|" in no_comm and not self.block_params:
+                            left = no_comm[1:no_comm.index("|")].strip()
                             if left:
                                 for t in left.split():
                                     if t.startswith(":"):

@@ -166,45 +166,51 @@ class Parser:
     # Funkcia tokenize() rozdeluje retazec na tokeny, pri zachovani vnorenia zatvoriek.
     # Doplneny kod: Ak token obsahuje dvojbodku nasledovanu dalsim textom, rozdelime ho.
     def tokenize(self, s):
-        # Insert a space after a closing parenthesis if immediately followed by a letter or digit.
-        s = re.sub(r'\)([A-Za-z0-9])', r') \1', s)
-        # Insert a space before an opening parenthesis if immediately preceded by a letter or digit.
-        s = re.sub(r'([A-Za-z0-9])(\()', r'\1 \2', s)
+        """
+        Splits the string s into tokens while grouping balanced square brackets
+        and parentheses as single tokens. Also, if a colon ':' is encountered,
+        it is attached to the preceding token.
+        """
         tokens = []
-        current = ""
-        pdepth = 0  # depth for parentheses
-        bdepth = 0  # depth for square brackets
-        for ch in s:
-            if ch == '(':
-                pdepth += 1
-                current += ch
-            elif ch == ')':
-                pdepth -= 1
-                current += ch
-            elif ch == '[':
-                bdepth += 1
-                current += ch
-            elif ch == ']':
-                bdepth -= 1
-                current += ch
-            elif ch.isspace() and pdepth == 0 and bdepth == 0:
-                if current:
-                    tokens.append(current)
-                    current = ""
-            else:
-                current += ch
-        if current:
-            tokens.append(current)
-        # Post-process tokens: if a token contains a colon followed by text, split it.
-        final_tokens = []
-        for token in tokens:
-            m = re.fullmatch(r"([A-Za-z0-9]+:)(.+)", token)
-            if m:
-                final_tokens.append(m.group(1))
-                final_tokens.append(m.group(2))
-            else:
-                final_tokens.append(token)
-        return final_tokens
+        i = 0
+        while i < len(s):
+            # Skip whitespace.
+            if s[i].isspace():
+                i += 1
+                continue
+
+            # If we encounter an opening bracket or parenthesis, consume the entire group.
+            if s[i] in "[(":
+                open_char = s[i]
+                close_char = "]" if open_char == "[" else ")"
+                start = i
+                depth = 1
+                i += 1
+                while i < len(s) and depth > 0:
+                    if s[i] == open_char:
+                        depth += 1
+                    elif s[i] == close_char:
+                        depth -= 1
+                    i += 1
+                tokens.append(s[start:i])
+                continue
+
+            # If the character is a colon, attach it to the previous token (if any).
+            if s[i] == ":":
+                if tokens:
+                    tokens[-1] += ":"
+                else:
+                    tokens.append(":")
+                i += 1
+                continue
+
+            # Otherwise, accumulate a token until whitespace or a special character is reached.
+            start = i
+            while i < len(s) and (not s[i].isspace()) and s[i] not in "[]():":
+                i += 1
+            tokens.append(s[start:i])
+        return tokens
+
 
     def parse_inline_block(self, block_str):
         # Remove the surrounding brackets.
@@ -233,37 +239,40 @@ class Parser:
         instructions = self.parse_block_instructions(raw_instr)
         return {"type": "block", "arity": len(params), "parameters": params, "instructions": instructions}
 
+
     def parse_expr(self, expr_str):
         expr_str = expr_str.strip()
-        # If the expression is an inline block literal, handle it separately.
+        # First, if the entire expression is a block literal, handle it:
         if expr_str.startswith("[") and expr_str.endswith("]"):
             return self.parse_inline_block(expr_str)
+        # Otherwise, remove any outer balanced parentheses.
         expr_str = self.strip_parentheses(expr_str)
-        # String literal must end on the same line.
+        # Then check for string literal, numbers, etc.
         if expr_str.startswith("'") and not expr_str.endswith("'"):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if expr_str and expr_str[0] in "+-" and not re.fullmatch(r"[+-]\d+", expr_str):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if re.fullmatch(r"[+-]?\d+", expr_str):
             return {"type": "literal", "class": "Integer", "value": expr_str}
-        if expr_str == "nil":
-            return {"type": "literal", "class": "Nil", "value": expr_str}
-        if expr_str == "true":
-            return {"type": "literal", "class": "True", "value": expr_str}
-        if expr_str == "false":
-            return {"type": "literal", "class": "False", "value": expr_str}
+        if expr_str in ("nil", "true", "false"):
+            lit_class = {"nil": "Nil", "true": "True", "false": "False"}[expr_str]
+            return {"type": "literal", "class": lit_class, "value": expr_str}
         if expr_str.startswith("'") and expr_str.endswith("'"):
             value = expr_str[1:-1]
             if "\n" in value:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             validate_string_literal(value)
-            value = value.replace("\\'", "\\&apos;")
-            value = value.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;").replace('"', "&quot;")
+            value = (value.replace("\\'", "\\&apos;")
+                         .replace("<", "&lt;")
+                         .replace(">", "&gt;")
+                         .replace("&", "&amp;")
+                         .replace('"', "&quot;"))
             return {"type": "literal", "class": "String", "value": value}
+        # Tokenize the expression using our new tokenizer.
         tokens = self.tokenize(expr_str)
         if len(tokens) == 0:
             return None
-        # Single-token branch.
+        # If a single token is produced, determine if it is a variable or a class literal.
         if len(tokens) == 1:
             token = tokens[0].strip()
             if token.endswith(":"):
@@ -279,24 +288,16 @@ class Parser:
                     print("Problem token (variable):", token, file=sys.stderr)
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "var", "name": token}
-        # Two-token branch: treat as simple send with no arguments.
+        # Two-token branch: treat as a simple send with no arguments.
         if len(tokens) == 2:
-            receiver_token = tokens[0].strip()
-            # Always re-parse the receiver.
-            receiver_node = self.parse_expr(receiver_token)
+            receiver = self.parse_expr(tokens[0])
             selector = tokens[1].strip()
-            return {"type": "send", "selector": selector, "expr": receiver_node, "args": []}
-        # Multi-token send expression branch.
+            return {"type": "send", "selector": selector, "expr": receiver, "args": []}
+        # Multi-token send expression: tokens should come in pairs after the receiver.
         if len(tokens) > 2 and tokens[1].strip().endswith(":"):
             if len(tokens) % 2 == 0:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
-            # Clean up the last token: if it ends with extraneous ")" characters, strip them off.
-            tokens[-1] = tokens[-1].strip()
-            while tokens[-1].endswith(")") and not self.check_balanced(tokens[-1]):
-                tokens[-1] = tokens[-1][:-1].strip()
-            receiver_token = tokens[0].strip()
-            # Always re-parse the receiver.
-            receiver_node = self.parse_expr(receiver_token)
+            receiver = self.parse_expr(tokens[0])
             selector_parts = []
             args = []
             for i in range(1, len(tokens), 2):
@@ -310,7 +311,7 @@ class Parser:
                     arg_node = self.parse_expr(tokens[i + 1])
                     args.append({"order": len(args) + 1, "expr": arg_node})
             selector = "".join(selector_parts)
-            return {"type": "send", "selector": selector, "expr": receiver_node, "args": args}
+            return {"type": "send", "selector": selector, "expr": receiver, "args": args}
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
 
     # Funkcia parse_class_header() parsuje hlavicku triedy a inicializuje current_class.
@@ -693,6 +694,16 @@ def build_expr_xml(expr, parent):
             param_elem = SubElement(block_elem, "parameter")
             param_elem.attrib["order"] = str(idx)
             param_elem.attrib["name"] = par
+        # Added: output instructions if the block contains any.
+        for instr in expr.get("instructions", []):
+            if instr["type"] == "assign":
+                assign_elem = SubElement(block_elem, "assign")
+                assign_elem.attrib["order"] = str(instr["order"])
+                var_elem = SubElement(assign_elem, "var")
+                var_elem.attrib["name"] = instr["var"]
+                expr_elem = SubElement(assign_elem, "expr")
+                build_expr_xml(instr["expr"], expr_elem)
+
 
 # Modified build_xml using build_expr_xml for expressions.
 def build_xml(classes, description):
@@ -757,8 +768,6 @@ def main():
     pretty_str = pretty_str.replace("&amp;apos;", "&apos;")
     pretty_str = pretty_str.replace("\\\\\\&apos;", "\\\\&apos;")
     sys.stdout.write(pretty_str)
-
-
 
 
 # Spustenie hlavnej funkcie main().

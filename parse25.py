@@ -11,25 +11,32 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 # Ak spatne lomitko nie je nasledovane iba znakmi ' alebo \, alebo literal obsahuje skutocny znak noveho riadku,
 # alebo obsahuje retazec "\n", program skonci s chybovym kodom 21.
 def validate_string_literal(literal):
-    # Prejdeme literal znak po znaku
     i = 0
     while i < len(literal):
-        # Overime, ci literal neobsahuje skutocny znak noveho riadku
-        if literal[i] == "\n":
+        # If we encounter a backslash, check the following character.
+        if literal[i] == '\\' and literal[i+1] == 'n':
+            print("newline in literal", file=sys.stderr)
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
-        # Ak narazime na spatne lomitko
-        if literal[i] == "\\":
-            # Ak spatne lomitko je posledny znak, chyba
+
+        if literal[i] == "\\" and literal[i + 1] == "\\":
+            print(literal[i], file=sys.stderr)
+            # A backslash cannot be the last character.
             if i + 1 >= len(literal):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             next_char = literal[i + 1]
-            # Povolene su iba escapovane apostrofy alebo escapovane spatne lomitka
-            if next_char not in ["'", "\\"]:
+            # Only the escapes for an apostrophe, backslash, and 'n' are allowed.
+            print(next_char, file=sys.stderr)
+            if next_char == "\\":
+                next_char = literal[i + 2]
+                print(next_char, file=sys.stderr)
+
+            if next_char not in ["'", "\\", "n"]:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
-            # Preskocime nasledujuci znak, pretoze je castou escape sekvencie
-            i += 2
+            # Skip over the two-character escape.
+            i += 3
         else:
             i += 1
+
 
 
 # Definicia chybovych kodov.

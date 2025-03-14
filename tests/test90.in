@@ -1,0 +1,5 @@
+class A : B {}
+class Main : Object {
+    run [|]
+}
+class B : A {}

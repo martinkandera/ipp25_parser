@@ -1,0 +1,5 @@
+class Main : Object {
+    run [|]
+}
+class A:Integer{}
+class A:Integer{}

@@ -1,0 +1,6 @@
+class Main : Object {
+    run [|
+        x := self abc2: 2.
+    ]
+    abc2: [|]
+}

@@ -1,0 +1,4 @@
+class Main : Object {
+    run [|]
+    a2:b2: [:x :x | a := 1.]
+}

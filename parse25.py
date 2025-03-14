@@ -15,20 +15,16 @@ def validate_string_literal(literal):
     while i < len(literal):
         # If we encounter a backslash, check the following character.
         if literal[i] == '\\' and literal[i+1] == 'n':
-            print("newline in literal", file=sys.stderr)
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
 
         if literal[i] == "\\" and literal[i + 1] == "\\":
-            print(literal[i], file=sys.stderr)
             # A backslash cannot be the last character.
             if i + 1 >= len(literal):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             next_char = literal[i + 1]
             # Only the escapes for an apostrophe, backslash, and 'n' are allowed.
-            print(next_char, file=sys.stderr)
             if next_char == "\\":
                 next_char = literal[i + 2]
-                print(next_char, file=sys.stderr)
 
             if next_char not in ["'", "\\", "n"]:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)

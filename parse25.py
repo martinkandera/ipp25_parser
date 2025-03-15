@@ -229,7 +229,8 @@ class Parser:
                     if token.startswith(":"):
                         params.append(token[1:])
                     else:
-                        sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                        # Changed error code from LEX_ERR_INPUT (21) to SYN_ERR_INPUT (22)
+                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
             instr_str = instr_str.strip()
         else:
             instr_str = inner
@@ -241,6 +242,7 @@ class Parser:
         # Use the existing parse_block_instructions to parse the list of instruction lines.
         instructions = self.parse_block_instructions(raw_instr)
         return {"type": "block", "arity": len(params), "parameters": params, "instructions": instructions}
+
 
 
     def parse_expr(self, expr_str):
@@ -287,12 +289,18 @@ class Parser:
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "literal", "class": "class", "value": token}
             else:
+                # If the token does not start with a lowercase letter or underscore, it's a syntax error.
+                if token[0] not in "abcdefghijklmnopqrstuvwxyz_":
+                    sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", token):
                     print("Problem token (variable):", token, file=sys.stderr)
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "var", "name": token}
         # Two-token branch: treat as a simple send with no arguments.
         if len(tokens) == 2:
+            # If the selector ends with a colon, an argument is expected – syntax error.
+            if tokens[1].strip().endswith(":"):
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
             receiver = self.parse_expr(tokens[0])
             selector = tokens[1].strip()
             return {"type": "send", "selector": selector, "expr": receiver, "args": []}
@@ -316,6 +324,9 @@ class Parser:
             selector = "".join(selector_parts)
             return {"type": "send", "selector": selector, "expr": receiver, "args": args}
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
+
+
+
 
     # Funkcia parse_class_header() parsuje hlavicku triedy a inicializuje current_class.
     def parse_class_header(self, stripped):
@@ -371,27 +382,22 @@ class Parser:
                 combined_lines.append(current_line)
                 current_line = ""
 
-        # If there's leftover text not ending with a period, push it anyway
+        # If there's leftover text not ending with a period, push it as well.
         if current_line:
             combined_lines.append(current_line)
 
-        # Now parse each combined line with your original logic
         for line in combined_lines:
-            # Try matching var := something.
             m = assign_re.match(line.strip())
+            # Instead of silently skipping unmatched lines, we now raise a syntax error.
             if not m:
-                # If it doesn't match at all, either skip or raise an error
-                # (Skipping is typical if there's leftover blank lines, etc.)
-                continue
-
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
             var_name = m.group(1)
             if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", var_name):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
-
             expr_str = m.group(2).strip()
             clean_expr = self.strip_parentheses(expr_str)
 
-            # Then do your usual literal/var/block parse:
+            # Handling for inline block literals with parameters.
             if clean_expr.startswith("[") and clean_expr.endswith("]") and "|" in clean_expr:
                 param_part = clean_expr[1:clean_expr.index("|")].strip()
                 params = []
@@ -399,66 +405,78 @@ class Parser:
                     for token in param_part.split():
                         if token.startswith(":"):
                             params.append(token[1:])
-                block_node = {"type": "block", "arity": len(params), "parameters": params, "instructions": []}
-                instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
-
+                        else:
+                            sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                # Ensure the instructions end with a period.
+                instr_str = clean_expr[clean_expr.index("|") + 1:-1].strip()
+                if instr_str and not instr_str.endswith("."):
+                    instr_str += "."
+                raw_instr = [s.strip() + "." for s in instr_str.split(".") if s.strip()]
+                instructions.append({
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {
+                        "type": "block",
+                        "arity": len(params),
+                        "parameters": params,
+                        "instructions": self.parse_block_instructions(raw_instr)
+                    }
+                })
             elif clean_expr.startswith("[") and clean_expr.endswith("]"):
-                block_node = {"type": "block", "arity": 0, "parameters": [], "instructions": []}
-                instr = {"type": "assign", "order": order, "var": var_name, "expr": block_node}
-
+                instructions.append({
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": {"type": "block", "arity": 0, "parameters": [], "instructions": []}
+                })
             elif integer_re.fullmatch(clean_expr):
-                instr = {
+                instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "Integer", "value": clean_expr}
-                }
-
+                })
             elif clean_expr == "nil":
-                instr = {
+                instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "Nil", "value": "nil"}
-                }
-
+                })
             elif clean_expr == "true":
-                instr = {
+                instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "True", "value": "true"}
-                }
-
+                })
             elif clean_expr == "false":
-                instr = {
+                instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "False", "value": "false"}
-                }
-
+                })
             elif clean_expr.startswith("'") and clean_expr.endswith("'"):
                 value = clean_expr[1:-1]
                 validate_string_literal(value)
                 value = value.replace("\\'", "\\&apos;")
-                instr = {
+                instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "String", "value": value}
-                }
-
+                })
             else:
                 node = self.parse_expr(clean_expr)
                 if node is None:
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                instr = {"type": "assign", "order": order, "var": var_name, "expr": node}
-
-            instructions.append(instr)
+                instructions.append({"type": "assign", "order": order, "var": var_name, "expr": node})
             order += 1
 
         return instructions
+
 
     # Funkcia store_method() ulozi aktualnu metodu do current_class a resetuje pomocne premenne.
     def store_method(self):
@@ -526,15 +544,21 @@ class Parser:
                         self.block_params = []
                         self.block_body_lines = []
                         no_comm_block = self.remove_comments(block_literal)
+                        # NEW: if the block literal does not contain the pipe separator, it’s a syntax error.
                         if "|" in no_comm_block:
                             left = no_comm_block[1:no_comm_block.index("|")].strip()
                             if left:
                                 for t in left.split():
-                                    if t.startswith(":"):
+                                    # Each token in the parameter part must start with ':'; otherwise, syntax error.
+                                    if not t.startswith(":"):
+                                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                                    else:
                                         self.block_params.append(t[1:])
                             right = no_comm_block[no_comm_block.index("|") + 1:-1].strip()
                             if right:
                                 self.block_body_lines.append(right)
+                        else:
+                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
                         self.store_method()
                         if trailing:
                             if trailing.strip() == "=":
@@ -570,7 +594,6 @@ class Parser:
                         self.store_method()
                     else:
                         no_comm = self.remove_comments(stripped)
-                        # Only treat as a block header if the line starts with '['.
                         if no_comm.lstrip().startswith("[") and "|" in no_comm and not self.block_params:
                             left = no_comm[1:no_comm.index("|")].strip()
                             if left:
@@ -584,7 +607,8 @@ class Parser:
                             if no_comm.strip():
                                 self.block_body_lines.append(no_comm)
 
-    # Funkcia check_main() overuje, ci bola deklarovana trieda Main a metoda run.
+
+    # Add this method to the Parser class.
     def check_main(self):
         main_found = False
         run_found = False
@@ -598,6 +622,8 @@ class Parser:
                 break
         if not main_found or not run_found:
             sys.exit(ErrorType.SEM_IN_MAIN.value)
+
+
 
 
 # Semanticka kontrola: overuje definovane metody a inicializaciu premennych.

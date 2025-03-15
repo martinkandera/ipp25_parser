@@ -603,6 +603,43 @@ class Parser:
 # Semanticka kontrola: overuje definovane metody a inicializaciu premennych.
 # Tiez kontroluje, ci su definovane vsetky rodicovske triedy (super triedy) pre user-defined triedy.
 def semantic_check(classes):
+    # --- Preliminary checks for error code 35 ---
+    # Check for duplicate class definitions.
+    seen_classes = set()
+    for cls in classes:
+        if cls["name"] in seen_classes:
+            sys.exit(ErrorType.SEM_OTHER.value)
+        seen_classes.add(cls["name"])
+
+    # Check for duplicate method definitions within each class.
+    for cls in classes:
+        seen_methods = set()
+        for m in cls["methods"]:
+            if m["selector"] in seen_methods:
+                sys.exit(ErrorType.SEM_OTHER.value)
+            seen_methods.add(m["selector"])
+
+    # Check for duplicate formal parameters in each method.
+    for cls in classes:
+        for m in cls["methods"]:
+            params = m["block"].get("parameters", [])
+            if len(params) != len(set(params)):
+                sys.exit(ErrorType.SEM_OTHER.value)
+
+    # Check for circular inheritance.
+    for cls in classes:
+        visited = set()
+        current = cls
+        while current.get("parent"):
+            parent_name = current["parent"]
+            if parent_name in visited:
+                sys.exit(ErrorType.SEM_OTHER.value)
+            visited.add(parent_name)
+            parent_cls = next((c for c in classes if c["name"] == parent_name), None)
+            if parent_cls is None:
+                break
+            current = parent_cls
+
     # --- Undefined method/variable check (error code 32) ---
     builtin = {
         "Integer": {"from:", "new", "plus:"},
@@ -620,7 +657,6 @@ def semantic_check(classes):
         if cls["name"] not in class_methods:
             class_methods[cls["name"]] = set()
         for m in cls["methods"]:
-            # (The Main run arity check is done later in the arity check section.)
             class_methods[cls["name"]].add(m["selector"])
     # Propagate inheritance.
     changed = True
@@ -655,21 +691,18 @@ def semantic_check(classes):
             new_defined = set(expr.get("parameters", []))
             return
 
-    # Check each method's block instructions.
     for cls in classes:
         for m in cls["methods"]:
-            # Save the formal parameters separately.
-            formal_params = set(m["block"].get("parameters", []))
-            defined = set(formal_params)
+            defined = set(m["block"].get("parameters", []))
             defined.add("self")
             for instr in m["block"].get("instructions", []):
                 check_expr(instr["expr"], defined)
-                # NEW: If the variable being assigned collides with a formal parameter, exit with error 34.
-                if instr["var"] in formal_params:
+                # Collision of local variable with a formal parameter is error 34.
+                if instr["var"] in m["block"].get("parameters", []):
                     sys.exit(ErrorType.SEM_COLLISION.value)
                 defined.add(instr["var"])
 
-    # --- Now add arity (mismatch) checks (error code 33) ---
+    # --- Arity (mismatch) checks (error code 33) ---
     def build_method_arities(classes):
         builtin_arities = {
             "Integer": {"from:": 1, "new": 0, "plus:": 1},
@@ -750,10 +783,6 @@ def semantic_check(classes):
             break
     if not main_found or not run_found:
         sys.exit(ErrorType.SEM_IN_MAIN.value)
-
-
-
-
 
 
 def build_expr_xml(expr, parent):

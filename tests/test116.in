@@ -1,0 +1,3 @@
+class Main : Object {
+    Integer [ | x := 5.  ]
+}

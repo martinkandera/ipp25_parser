@@ -1,0 +1,5 @@
+class Main : Object {
+    run [|
+        nil := 1.
+    ]
+}

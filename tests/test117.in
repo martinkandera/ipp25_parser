@@ -1,0 +1,3 @@
+class Main : Object {
+    Irun [ | x := 5.  ]
+}

@@ -5,9 +5,6 @@ class Main : Object {
         z := y.
     ]
 
-    run [|
-        x := 1.
-        y := 1.
-        w := y.
-    ]
+    pepa:jak:se: [:a:b:c|]
+    pepa:jak:se: [:a:b:c|]
 }

@@ -620,9 +620,7 @@ def semantic_check(classes):
         if cls["name"] not in class_methods:
             class_methods[cls["name"]] = set()
         for m in cls["methods"]:
-            # NEW: In Main, run must be parameterless.
-            if cls["name"] == "Main" and m["selector"] == "run" and m["block"]["arity"] != 0:
-                sys.exit(ErrorType.SEM_MISSMATCH.value)
+            # (The Main run arity check is done later in the arity check section.)
             class_methods[cls["name"]].add(m["selector"])
     # Propagate inheritance.
     changed = True
@@ -657,12 +655,18 @@ def semantic_check(classes):
             new_defined = set(expr.get("parameters", []))
             return
 
+    # Check each method's block instructions.
     for cls in classes:
         for m in cls["methods"]:
-            defined = set(m["block"].get("parameters", []))
+            # Save the formal parameters separately.
+            formal_params = set(m["block"].get("parameters", []))
+            defined = set(formal_params)
             defined.add("self")
             for instr in m["block"].get("instructions", []):
                 check_expr(instr["expr"], defined)
+                # NEW: If the variable being assigned collides with a formal parameter, exit with error 34.
+                if instr["var"] in formal_params:
+                    sys.exit(ErrorType.SEM_COLLISION.value)
                 defined.add(instr["var"])
 
     # --- Now add arity (mismatch) checks (error code 33) ---
@@ -679,6 +683,9 @@ def semantic_check(classes):
             if cls["name"] not in method_arities:
                 method_arities[cls["name"]] = {}
             for m in cls["methods"]:
+                # In Main, the run method must be parameterless.
+                if cls["name"] == "Main" and m["selector"] == "run" and m["block"]["arity"] != 0:
+                    sys.exit(ErrorType.SEM_MISSMATCH.value)
                 method_arities[cls["name"]][m["selector"]] = m["block"]["arity"]
         changed = True
         while changed:

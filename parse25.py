@@ -603,7 +603,7 @@ class Parser:
 # Semanticka kontrola: overuje definovane metody a inicializaciu premennych.
 # Tiez kontroluje, ci su definovane vsetky rodicovske triedy (super triedy) pre user-defined triedy.
 def semantic_check(classes):
-    # Define built-in classes and their allowed methods.
+    # --- Undefined method/variable check (error code 32) ---
     builtin = {
         "Integer": {"from:", "new", "plus:"},
         "String": {"plus:"},
@@ -620,6 +620,9 @@ def semantic_check(classes):
         if cls["name"] not in class_methods:
             class_methods[cls["name"]] = set()
         for m in cls["methods"]:
+            # NEW: In Main, run must be parameterless.
+            if cls["name"] == "Main" and m["selector"] == "run" and m["block"]["arity"] != 0:
+                sys.exit(ErrorType.SEM_MISSMATCH.value)
             class_methods[cls["name"]].add(m["selector"])
     # Propagate inheritance.
     changed = True
@@ -634,7 +637,6 @@ def semantic_check(classes):
                     if len(class_methods[cls["name"]]) > before:
                         changed = True
 
-    # check_expr recursively verifies that every variable is defined and that message sends are valid.
     def check_expr(expr, defined_vars):
         if expr["type"] == "literal":
             return
@@ -642,7 +644,6 @@ def semantic_check(classes):
             if expr["name"] not in defined_vars:
                 sys.exit(ErrorType.SEM_UNDEFINED.value)
         elif expr["type"] == "send":
-            # Check the receiver expression.
             rec = expr["expr"]
             if rec["type"] == "literal" and rec.get("class") == "class":
                 cls_name = rec["value"]
@@ -650,24 +651,100 @@ def semantic_check(classes):
                     sys.exit(ErrorType.SEM_UNDEFINED.value)
             else:
                 check_expr(rec, defined_vars)
-            # Check all arguments.
             for arg in expr.get("args", []):
                 check_expr(arg["expr"], defined_vars)
         elif expr["type"] == "block":
-            # New block scope: parameters become defined in the block.
             new_defined = set(expr.get("parameters", []))
-            # (No further checking inside the block here.)
             return
 
-    # For each method in each class, verify that every used variable is defined.
     for cls in classes:
         for m in cls["methods"]:
-            # Start with the block's parameters plus the implicit "self".
             defined = set(m["block"].get("parameters", []))
             defined.add("self")
             for instr in m["block"].get("instructions", []):
                 check_expr(instr["expr"], defined)
                 defined.add(instr["var"])
+
+    # --- Now add arity (mismatch) checks (error code 33) ---
+    def build_method_arities(classes):
+        builtin_arities = {
+            "Integer": {"from:": 1, "new": 0, "plus:": 1},
+            "String": {"plus:": 1},
+            "Object": {}
+        }
+        method_arities = {}
+        for cls_name, arities in builtin_arities.items():
+            method_arities[cls_name] = dict(arities)
+        for cls in classes:
+            if cls["name"] not in method_arities:
+                method_arities[cls["name"]] = {}
+            for m in cls["methods"]:
+                method_arities[cls["name"]][m["selector"]] = m["block"]["arity"]
+        changed = True
+        while changed:
+            changed = False
+            for cls in classes:
+                if cls["parent"]:
+                    parent = cls["parent"]
+                    for sel, arity in method_arities[parent].items():
+                        if sel not in method_arities[cls["name"]]:
+                            method_arities[cls["name"]][sel] = arity
+                            changed = True
+        return method_arities
+
+    def check_expr_arity(expr, defined_vars, current_method_arities, method_arities):
+        if expr["type"] == "literal":
+            return
+        elif expr["type"] == "var":
+            return
+        elif expr["type"] == "send":
+            rec = expr["expr"]
+            # Case: receiver is a class literal.
+            if rec["type"] == "literal" and rec.get("class") == "class":
+                cls_name = rec["value"]
+                if cls_name in method_arities and expr["selector"] in method_arities[cls_name]:
+                    expected = method_arities[cls_name][expr["selector"]]
+                    if len(expr.get("args", [])) != expected:
+                        sys.exit(ErrorType.SEM_MISSMATCH.value)
+            # Case: receiver is the implicit 'self'.
+            elif rec["type"] == "var" and rec["name"] == "self":
+                if expr["selector"] in current_method_arities:
+                    expected = current_method_arities[expr["selector"]]
+                    if len(expr.get("args", [])) != expected:
+                        sys.exit(ErrorType.SEM_MISSMATCH.value)
+            else:
+                check_expr_arity(rec, defined_vars, current_method_arities, method_arities)
+            for arg in expr.get("args", []):
+                check_expr_arity(arg["expr"], defined_vars, current_method_arities, method_arities)
+        elif expr["type"] == "block":
+            new_defined = set(expr.get("parameters", []))
+            new_defined.update(defined_vars)
+            return
+
+    method_arities = build_method_arities(classes)
+    for cls in classes:
+        current_method_arities = method_arities[cls["name"]]
+        for m in cls["methods"]:
+            defined = set(m["block"].get("parameters", []))
+            defined.add("self")
+            for instr in m["block"].get("instructions", []):
+                check_expr_arity(instr["expr"], defined, current_method_arities, method_arities)
+
+    # --- Finally, verify that Main exists and has a run method ---
+    main_found = False
+    run_found = False
+    for cls in classes:
+        if cls["name"] == "Main":
+            main_found = True
+            for m in cls["methods"]:
+                if m["selector"] == "run":
+                    run_found = True
+                    break
+            break
+    if not main_found or not run_found:
+        sys.exit(ErrorType.SEM_IN_MAIN.value)
+
+
 
 
 

@@ -231,8 +231,6 @@ class Parser:
         instructions = self.parse_block_instructions(raw_instr)
         return {"type": "block", "arity": len(params), "parameters": params, "instructions": instructions}
 
-
-    # --- Modified parse_expr ---
     def parse_expr(self, expr_str):
         expr_str = expr_str.strip()
         if expr_str.startswith("[") and expr_str.endswith("]"):
@@ -259,7 +257,7 @@ class Parser:
                      .replace('"', "&quot;"))
             return {"type": "literal", "class": "String", "value": value}
         tokens = self.tokenize(expr_str)
-        # Detect any colon as a standalone token (which indicates extra whitespace)
+        # Detect any colon as a standalone token (indicating unwanted whitespace)
         if ":" in tokens:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         if len(tokens) == 0:
@@ -283,9 +281,15 @@ class Parser:
                 return {"type": "var", "name": token}
         if len(tokens) == 2:
             if tokens[1].strip().endswith(":"):
-                sys.exit(ErrorType.SYN_ERR_INPUT.value)  # For two-token sends like "5 timesRepeat:" -> RC 22.
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)  # e.g. "5 timesRepeat:" -> error
             receiver = self.parse_expr(tokens[0])
             selector = tokens[1].strip()
+            # Reject a selector that is not a valid identifier
+            if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", selector):
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
+            # Reject reserved selectors.
+            if selector in {"class", "self", "super", "nil", "true", "false"}:
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
             return {"type": "send", "selector": selector, "expr": receiver, "args": []}
         if len(tokens) > 2 and tokens[1].strip().endswith(":"):
             if len(tokens) % 2 == 0:
@@ -297,7 +301,7 @@ class Parser:
                 token_sel = tokens[i].strip()
                 if not token_sel.endswith(":"):
                     sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                # If the token does not match a selector token exactly, it is a lexical error.
+                # Check each selector token exactly.
                 if not re.fullmatch(r"[A-Za-z0-9]+:$", token_sel):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 selector_parts.append(token_sel)
@@ -305,9 +309,11 @@ class Parser:
                     arg_node = self.parse_expr(tokens[i + 1])
                     args.append({"order": len(args) + 1, "expr": arg_node})
             selector = "".join(selector_parts)
+            # Reject reserved concatenated selectors.
+            if selector in {"class", "self", "super", "nil", "true", "false"}:
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
             return {"type": "send", "selector": selector, "expr": receiver, "args": args}
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
-
 
     # Funkcia parse_class_header() parsuje hlavicku triedy a inicializuje current_class.
     def parse_class_header(self, stripped):
@@ -330,8 +336,12 @@ class Parser:
         if not mm:
             return None
         selector = mm.group(1)
+        # Check if the method name is a reserved identifier.
+        if selector in {"class", "self", "super", "nil", "true", "false"}:
+            sys.exit(ErrorType.SYN_ERR_INPUT.value)
         desc = mm.group(2) if mm.group(2) else ""
         return (selector, desc)
+
 
     # Funkcia parse_block_instructions() parsuje instrukcie v tele bloku.
     # Pred spracovanim kazdeho riadku kontroluje, ci ma parny pocet jednoduchych uvodzoviek.
@@ -516,7 +526,10 @@ class Parser:
                                 for t in left.split():
                                     if len(t) < 2 or not t.startswith(":"):
                                         sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                                    self.block_params.append(t[1:])
+                                    param = t[1:]
+                                    if param in {"class", "self", "super", "nil", "true", "false"}:
+                                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                                    self.block_params.append(param)
                             right = no_comm_block[no_comm_block.index("|") + 1:-1].strip()
                             if right:
                                 self.block_body_lines.append(right)
@@ -533,7 +546,6 @@ class Parser:
                                     self.program_description = comment_text
                                 if trailing:
                                     self.lines.insert(self.index, trailing)
-
                     elif stripped.startswith("["):
                         self.in_block = True
                         self.block_params = []
@@ -545,13 +557,15 @@ class Parser:
                                 for t in left.split():
                                     if len(t) < 2 or not t.startswith(":"):
                                         sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                                    self.block_params.append(t[1:])
+                                    param = t[1:]
+                                    if param in {"class", "self", "super", "nil", "true", "false"}:
+                                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                                    self.block_params.append(param)
                             right = no_comm[no_comm.index("|") + 1:].strip()
                             if right and right != "]":
                                 self.block_body_lines.append(right)
                         else:
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
-
                     else:
                         no_comm = self.remove_comments(stripped)
                         if not no_comm.strip():
@@ -567,14 +581,16 @@ class Parser:
                             if left:
                                 for t in left.split():
                                     if t.startswith(":"):
-                                        self.block_params.append(t[1:])
+                                        param = t[1:]
+                                        if param in {"class", "self", "super", "nil", "true", "false"}:
+                                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                                        self.block_params.append(param)
                             right = no_comm[no_comm.index("|") + 1:].strip()
                             if right:
                                 self.block_body_lines.append(right)
                         else:
                             if no_comm.strip():
                                 self.block_body_lines.append(no_comm)
-
 
     # Add this method to the Parser class.
     def check_main(self):

@@ -1,0 +1,17 @@
+class Main : Object {
+    run [|
+        "a = instance 14"
+        a := self foo: 4.
+        "b = instance Block"
+        b := [ :x | _ := 42. ].
+        "c = instance 42"
+        c := b value: 16.
+        "d = instance 'ahoj' - print vrací self, viz Vestavěné třídy"
+        d := 'ahoj' print.
+    ]
+    foo: [ :x |
+    "s proměnnou 'u' se nijak dál nepracuje , ale výsledek zaslání
+    zprávy 'plus:' bude vrácen jako výsledek volání metody 'foo'"
+        u := x plus: 10.
+    ]
+}

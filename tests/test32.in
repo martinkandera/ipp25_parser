@@ -1,0 +1,7 @@
+class Main : Object {
+    run [|
+        x := ([|
+            x := (2).
+        ]).
+    ]
+}

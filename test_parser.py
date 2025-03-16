@@ -6,6 +6,7 @@ import sys
 
 GREEN = "\033[92m"
 RED = "\033[91m"
+BLUE = "\033[94m"
 RESET = "\033[0m"
 
 def numeric_key(filename):
@@ -16,22 +17,18 @@ def numeric_key(filename):
     test10.in => (10, '')
     Ak by sa tam vyskytovali dodatocne znaky, tie sluzia ako tie-break.
     """
-    # Ocakavame nazvy typu testX.in, odfiltrujeme prefix test a priponu .in
-    # Napr. test12.in => 'test12.in' => core='12'
     core = filename
     if core.startswith('test'):
         core = core[4:]  # odstranime 'test'
     if core.endswith('.in'):
         core = core[:-3]  # odstranime '.in'
 
-    # Najdeme uvodne cislo:
     m = re.match(r'^(\d+)(.*)', core)
     if m:
         number = int(m.group(1))
         rest = m.group(2)
         return (number, rest)
     else:
-        # Ak tam nie je cislo, triedime neskor
         return (999999999, core)
 
 def normalize_xml(xml_str):
@@ -42,7 +39,7 @@ def normalize_xml(xml_str):
 
 def run_file_tests():
     tests_dir = "tests"
-    # najdeme vsetky subory konciace na .in (a nie z param. testov)
+    # Najdeme vsetky subory s priponou .in (okrem param. testov)
     test_files = [f for f in os.listdir(tests_dir)
                   if f.endswith(".in") and not f.startswith("test0_")]
     # Zoradime podla cisla
@@ -53,7 +50,14 @@ def run_file_tests():
     if total:
         print("File-based tests:")
 
+    previous_test_number = None
     for in_file in test_files:
+        current_number, _ = numeric_key(in_file)
+        # Ak existuje medzera v ciselnom poradi, vlozime oddeľovač
+        if previous_test_number is not None and current_number != previous_test_number + 1:
+            print("\033[94m-------------------------\033[0m")
+        previous_test_number = current_number
+
         test_name = in_file[:-3]  # odstranime ".in"
         out_file = test_name + ".out"
         rc_file = test_name + ".rc"
@@ -94,7 +98,6 @@ def run_file_tests():
             passed += 1
             continue
 
-        # Porovname vystup
         norm_stdout = normalize_xml(stdout)
         norm_expected = normalize_xml(expected_output)
         if norm_stdout == norm_expected:

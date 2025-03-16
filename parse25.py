@@ -169,20 +169,12 @@ class Parser:
     # Funkcia tokenize() rozdeluje retazec na tokeny, pri zachovani vnorenia zatvoriek.
     # Doplneny kod: Ak token obsahuje dvojbodku nasledovanu dalsim textom, rozdelime ho.
     def tokenize(self, s):
-        """
-        Splits the string s into tokens while grouping balanced square brackets
-        and parentheses as single tokens. Also, if a colon ':' is encountered,
-        it is attached to the preceding token.
-        """
         tokens = []
         i = 0
         while i < len(s):
-            # Skip whitespace.
             if s[i].isspace():
                 i += 1
                 continue
-
-            # If we encounter an opening bracket or parenthesis, consume the entire group.
             if s[i] in "[(":
                 open_char = s[i]
                 close_char = "]" if open_char == "[" else ")"
@@ -197,26 +189,22 @@ class Parser:
                     i += 1
                 tokens.append(s[start:i])
                 continue
-
-            # If the character is a colon, attach it to the previous token (if any).
             if s[i] == ":":
-                if tokens:
+                # Attach colon to previous token only if there is no whitespace before it.
+                if i > 0 and not s[i - 1].isspace():
                     tokens[-1] += ":"
                 else:
                     tokens.append(":")
                 i += 1
                 continue
-
-            # Otherwise, accumulate a token until whitespace or a special character is reached.
             start = i
             while i < len(s) and (not s[i].isspace()) and s[i] not in "[]():":
                 i += 1
             tokens.append(s[start:i])
         return tokens
 
-
+    # --- Modified parse_inline_block ---
     def parse_inline_block(self, block_str):
-        # Remove the surrounding brackets.
         inner = block_str[1:-1].strip()
         params = []
         instr_str = ""
@@ -224,35 +212,32 @@ class Parser:
             param_part, instr_str = inner.split("|", 1)
             param_part = param_part.strip()
             if param_part:
-                # Parameters should start with ':'; remove the colon.
                 for token in param_part.split():
-                    if token.startswith(":"):
-                        params.append(token[1:])
+                    if len(token) < 2:
+                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                    if re.fullmatch(r":[a-z_][A-Za-z0-9]*", token):
+                        param_id = token[1:]
+                        if param_id in {"class", "self", "super", "nil", "true", "false"}:
+                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                        params.append(param_id)
                     else:
-                        # Changed error code from LEX_ERR_INPUT (21) to SYN_ERR_INPUT (22)
                         sys.exit(ErrorType.SYN_ERR_INPUT.value)
             instr_str = instr_str.strip()
         else:
             instr_str = inner
-        # Ensure the instructions end with a period.
         if instr_str and not instr_str.endswith("."):
             instr_str += "."
-        # Split the instructions by period and reattach the period.
         raw_instr = [s.strip() + "." for s in instr_str.split(".") if s.strip()]
-        # Use the existing parse_block_instructions to parse the list of instruction lines.
         instructions = self.parse_block_instructions(raw_instr)
         return {"type": "block", "arity": len(params), "parameters": params, "instructions": instructions}
 
 
-
+    # --- Modified parse_expr ---
     def parse_expr(self, expr_str):
         expr_str = expr_str.strip()
-        # First, if the entire expression is a block literal, handle it:
         if expr_str.startswith("[") and expr_str.endswith("]"):
             return self.parse_inline_block(expr_str)
-        # Otherwise, remove any outer balanced parentheses.
         expr_str = self.strip_parentheses(expr_str)
-        # Then check for string literal, numbers, etc.
         if expr_str.startswith("'") and not expr_str.endswith("'"):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if expr_str and expr_str[0] in "+-" and not re.fullmatch(r"[+-]\d+", expr_str):
@@ -268,16 +253,17 @@ class Parser:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
             validate_string_literal(value)
             value = (value.replace("\\'", "\\&apos;")
-                         .replace("<", "&lt;")
-                         .replace(">", "&gt;")
-                         .replace("&", "&amp;")
-                         .replace('"', "&quot;"))
+                     .replace("<", "&lt;")
+                     .replace(">", "&gt;")
+                     .replace("&", "&amp;")
+                     .replace('"', "&quot;"))
             return {"type": "literal", "class": "String", "value": value}
-        # Tokenize the expression using our new tokenizer.
         tokens = self.tokenize(expr_str)
+        # Detect any colon as a standalone token (which indicates extra whitespace)
+        if ":" in tokens:
+            sys.exit(ErrorType.SYN_ERR_INPUT.value)
         if len(tokens) == 0:
             return None
-        # If a single token is produced, determine if it is a variable or a class literal.
         if len(tokens) == 1:
             token = tokens[0].strip()
             if token.endswith(":"):
@@ -289,22 +275,18 @@ class Parser:
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "literal", "class": "class", "value": token}
             else:
-                # If the token does not start with a lowercase letter or underscore, it's a syntax error.
                 if token[0] not in "abcdefghijklmnopqrstuvwxyz_":
                     sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", token):
                     print("Problem token (variable):", token, file=sys.stderr)
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "var", "name": token}
-        # Two-token branch: treat as a simple send with no arguments.
         if len(tokens) == 2:
-            # If the selector ends with a colon, an argument is expected – syntax error.
             if tokens[1].strip().endswith(":"):
-                sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)  # For two-token sends like "5 timesRepeat:" -> RC 22.
             receiver = self.parse_expr(tokens[0])
             selector = tokens[1].strip()
             return {"type": "send", "selector": selector, "expr": receiver, "args": []}
-        # Multi-token send expression: tokens should come in pairs after the receiver.
         if len(tokens) > 2 and tokens[1].strip().endswith(":"):
             if len(tokens) % 2 == 0:
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
@@ -314,7 +296,8 @@ class Parser:
             for i in range(1, len(tokens), 2):
                 token_sel = tokens[i].strip()
                 if not token_sel.endswith(":"):
-                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                    sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                # If the token does not match a selector token exactly, it is a lexical error.
                 if not re.fullmatch(r"[A-Za-z0-9]+:$", token_sel):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 selector_parts.append(token_sel)
@@ -324,8 +307,6 @@ class Parser:
             selector = "".join(selector_parts)
             return {"type": "send", "selector": selector, "expr": receiver, "args": args}
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
-
-
 
 
     # Funkcia parse_class_header() parsuje hlavicku triedy a inicializuje current_class.
@@ -357,47 +338,34 @@ class Parser:
     def parse_block_instructions(self, lines_in_block):
         instructions = []
         order = 1
-        # Allow multiline matches; also note DOTALL so '.' can match across newlines
         assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$", re.DOTALL)
         integer_re = re.compile(r"^[+-]?\d+$")
-
-        # We'll accumulate lines until we see a trailing period, then parse that chunk
         combined_lines = []
         current_line = ""
-
-        # First, check quotes on each line (as before), but don’t parse them yet.
         for line in lines_in_block:
-            # If the count of non-escaped quotes isn’t 0 or 2, error:
             if (line.count("'") - line.count("\\'")) not in (0, 2):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
-
-            # Append this line (stripped) to current_line
             if current_line:
                 current_line += " " + line.strip()
             else:
                 current_line = line.strip()
-
-            # If this combined text ends with a period, treat it as a full assignment
             if current_line.endswith("."):
                 combined_lines.append(current_line)
                 current_line = ""
-
-        # If there's leftover text not ending with a period, push it as well.
         if current_line:
             combined_lines.append(current_line)
-
         for line in combined_lines:
             m = assign_re.match(line.strip())
-            # Instead of silently skipping unmatched lines, we now raise a syntax error.
             if not m:
                 sys.exit(ErrorType.SYN_ERR_INPUT.value)
             var_name = m.group(1)
             if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", var_name):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
+            # Check for reserved identifiers.
+            if var_name in {"self", "super", "true", "false", "nil", "class"}:
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
             expr_str = m.group(2).strip()
             clean_expr = self.strip_parentheses(expr_str)
-
-            # Handling for inline block literals with parameters.
             if clean_expr.startswith("[") and clean_expr.endswith("]") and "|" in clean_expr:
                 param_part = clean_expr[1:clean_expr.index("|")].strip()
                 params = []
@@ -407,7 +375,6 @@ class Parser:
                             params.append(token[1:])
                         else:
                             sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                # Ensure the instructions end with a period.
                 instr_str = clean_expr[clean_expr.index("|") + 1:-1].strip()
                 if instr_str and not instr_str.endswith("."):
                     instr_str += "."
@@ -474,9 +441,7 @@ class Parser:
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 instructions.append({"type": "assign", "order": order, "var": var_name, "expr": node})
             order += 1
-
         return instructions
-
 
     # Funkcia store_method() ulozi aktualnu metodu do current_class a resetuje pomocne premenne.
     def store_method(self):
@@ -535,6 +500,7 @@ class Parser:
                                 continue
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 if not self.in_block:
+                    # --- Modified block literal processing in parse_main ---
                     if "[" in stripped and "]" in stripped:
                         idx_open = stripped.find("[")
                         idx_close = stripped.find("]")
@@ -544,16 +510,13 @@ class Parser:
                         self.block_params = []
                         self.block_body_lines = []
                         no_comm_block = self.remove_comments(block_literal)
-                        # NEW: if the block literal does not contain the pipe separator, it’s a syntax error.
                         if "|" in no_comm_block:
                             left = no_comm_block[1:no_comm_block.index("|")].strip()
                             if left:
                                 for t in left.split():
-                                    # Each token in the parameter part must start with ':'; otherwise, syntax error.
-                                    if not t.startswith(":"):
+                                    if len(t) < 2 or not t.startswith(":"):
                                         sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                                    else:
-                                        self.block_params.append(t[1:])
+                                    self.block_params.append(t[1:])
                             right = no_comm_block[no_comm_block.index("|") + 1:-1].strip()
                             if right:
                                 self.block_body_lines.append(right)
@@ -570,6 +533,7 @@ class Parser:
                                     self.program_description = comment_text
                                 if trailing:
                                     self.lines.insert(self.index, trailing)
+
                     elif stripped.startswith("["):
                         self.in_block = True
                         self.block_params = []
@@ -579,11 +543,15 @@ class Parser:
                             left = no_comm[1:no_comm.index("|")].strip()
                             if left:
                                 for t in left.split():
-                                    if t.startswith(":"):
-                                        self.block_params.append(t[1:])
+                                    if len(t) < 2 or not t.startswith(":"):
+                                        sys.exit(ErrorType.SYN_ERR_INPUT.value)
+                                    self.block_params.append(t[1:])
                             right = no_comm[no_comm.index("|") + 1:].strip()
                             if right and right != "]":
                                 self.block_body_lines.append(right)
+                        else:
+                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
+
                     else:
                         no_comm = self.remove_comments(stripped)
                         if not no_comm.strip():

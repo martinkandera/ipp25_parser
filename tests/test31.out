@@ -4,13 +4,13 @@
         <method selector="run">
             <block arity="0">
                 <assign order="1">
-                    <var name="x" />
+                    <var name="x"/>
                     <expr>
                         <block arity="0">
                             <assign order="1">
-                                <var name="x" />
+                                <var name="x"/>
                                 <expr>
-                                    <literal class="Integer" value="2" />
+                                    <literal class="Integer" value="2"/>
                                 </expr>
                             </assign>
                         </block>

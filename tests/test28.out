@@ -22,7 +22,7 @@
                     <var name="b"/>
                     <expr>
                         <block arity="1">
-                            <parameter name="x" order="1"/>
+                            <parameter order="1" name="x"/>
                             <assign order="1">
                                 <var name="_"/>
                                 <expr>
@@ -61,7 +61,7 @@
         </method>
         <method selector="foo:">
             <block arity="1">
-                <parameter name="x" order="1"/>
+                <parameter order="1" name="x"/>
                 <assign order="1">
                     <var name="u"/>
                     <expr>

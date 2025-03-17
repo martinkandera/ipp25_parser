@@ -105,9 +105,9 @@ def run_file_tests():
             passed += 1
         else:
             print(f"{RED}Test {test_name}: FAIL (output mismatch){RESET}")
-            print("----- Expected output -----")
+            print("\033[94m----- Expected output -----\033[0m")
             print(norm_expected)
-            print("----- Actual output -----")
+            print("\033[94m----- Actual output -----\033[0m")
             print(norm_stdout)
             print("-------------------------")
 

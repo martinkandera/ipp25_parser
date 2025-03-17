@@ -58,43 +58,39 @@ def show_help():
     sys.exit(ErrorType.NO_ERROR.value)
 
 
-# Trieda Parser obsahuje metody na lexikalnu a syntakticku analyzu vstupneho kodu.
 class Parser:
-    # Regularne vyrazy pre hlavicku triedy a hlavicku metody.
+    # Regular expressions for class and method headers.
     class_header_re = re.compile(r"^class\s+([A-Z][A-Za-z0-9]*)\s*(?::\s*([A-Z][A-Za-z0-9]*))?\s*\{(.*)$")
     method_header_re = re.compile(r"^([a-z_][A-Za-z0-9_:]*)(?:\s+\"([^\"]+)\")?\s*$")
 
     def __init__(self, lines):
-        self.lines = lines  # zoznam vstupnych riadkov
-        self.index = 0  # aktualny index v zozname
-        self.classes = []  # zoznam parsovanych tried
-        self.current_class = None  # aktualne spracovavana trieda
-        self.current_method = None  # aktualne spracovavana metoda
-        self.in_block = False  # ci sa spracovava telo bloku
-        self.block_params = []  # parametre bloku (zoznam retezcov bez dvojtych bodiek)
-        self.block_body_lines = []  # riadky tela bloku
-        self.program_description = None  # popis ulozeny z hlavicky metody run v triede Main
+        self.lines = lines          # list of input lines
+        self.index = 0              # current index in the list
+        self.classes = []           # parsed classes
+        self.current_class = None   # currently processed class
+        self.current_method = None  # currently processed method
+        self.in_block = False       # flag: are we processing a block body?
+        self.block_params = []      # parameters for the block (list of strings without the colon)
+        self.block_body_lines = []  # raw lines of the block body
+        self.program_description = None  # description from Main's run method
 
-    # Funkcia eof() vracia True, ak sme dosiahli koniec vstupnych riadkov.
     def eof(self):
         return self.index >= len(self.lines)
 
-    # Funkcia get_line() vrati aktualny riadok.
     def get_line(self):
         if self.eof():
             return None
         return self.lines[self.index]
 
-    # Funkcia advance() posunie index o 1.
     def advance(self):
         self.index += 1
 
-    # Funkcia remove_comments() odstrani komentarove casti (text medzi dvojitymi uvodzovkami)
-    # a zachova retazcove literaly v jednoduchych uvodzovkach.
+    # Remove comments (text between double quotes) from a line,
+    # preserving single-quoted string literals.
     def remove_comments(self, line):
         result = ""
         i = 0
-        in_single = False  # Sledovanie, ci sme vo vnutri retazcoveho literalu v jednoduchych uvodzovkach
+        in_single = False  # Track if we are inside a single-quoted literal.
         while i < len(line):
             ch = line[i]
             if ch == "'" and not in_single:
@@ -111,13 +107,39 @@ class Parser:
                     j += 1
                 if j >= len(line):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                i = j + 1  # Preskocime komentarovu cast
+                i = j + 1  # Skip over the comment (both quotes and text between).
             else:
                 result += ch
                 i += 1
         return result
 
-    # Funkcia extract_first_trailing_comment() extrahuje prvy trailing komentar zo vstupneho textu.
+    # Remove comments from an entire text (which may span multiple lines).
+    def remove_comments_multiline(self, text):
+        result = ""
+        i = 0
+        in_single = False  # Track if we're inside a single-quoted literal.
+        while i < len(text):
+            ch = text[i]
+            if ch == "'" and not in_single:
+                in_single = True
+                result += ch
+                i += 1
+            elif ch == "'" and in_single:
+                in_single = False
+                result += ch
+                i += 1
+            elif not in_single and ch == '"':
+                j = i + 1
+                while j < len(text) and text[j] != '"':
+                    j += 1
+                if j >= len(text):
+                    sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                i = j + 1  # Skip entire comment.
+            else:
+                result += ch
+                i += 1
+        return result
+
     def extract_first_trailing_comment(self, text):
         m = re.search(r'"([^"]*)"', text)
         if not m:
@@ -125,8 +147,6 @@ class Parser:
         raw_comment = m.group(1)
         return self.transform_description(raw_comment)
 
-    # Funkcia transform_description() transformuje text popisu: nahradi skutocne znaky noveho riadku
-    # a literalne "\n" specialnymi symbolmi.
     def transform_description(self, desc):
         desc = desc.replace('\n', '\u0001')
         desc = desc.replace(r'\n', '\u0001')
@@ -147,14 +167,12 @@ class Parser:
                 i += 1
         return "".join(out)
 
-    # Funkcia strip_parentheses() odstrani vonkajsie zatvorky, ak su vyvazene.
     def strip_parentheses(self, expr):
         expr = expr.strip()
         while expr.startswith("(") and expr.endswith(")") and self.check_balanced(expr[1:-1]):
             expr = expr[1:-1].strip()
         return expr
 
-    # Funkcia check_balanced() kontroluje, ci su zatvorky vyvazene.
     def check_balanced(self, s):
         depth = 0
         for ch in s:
@@ -166,8 +184,7 @@ class Parser:
                     return False
         return depth == 0
 
-    # Funkcia tokenize() rozdeluje retazec na tokeny, pri zachovani vnorenia zatvoriek.
-    # Doplneny kod: Ak token obsahuje dvojbodku nasledovanu dalsim textom, rozdelime ho.
+    # Tokenize a string, preserving nested brackets.
     def tokenize(self, s):
         tokens = []
         i = 0
@@ -190,7 +207,6 @@ class Parser:
                 tokens.append(s[start:i])
                 continue
             if s[i] == ":":
-                # Attach colon to previous token only if there is no whitespace before it.
                 if i > 0 and not s[i - 1].isspace():
                     tokens[-1] += ":"
                 else:
@@ -203,7 +219,7 @@ class Parser:
             tokens.append(s[start:i])
         return tokens
 
-    # --- Modified parse_inline_block ---
+    # Parse an inline block literal.
     def parse_inline_block(self, block_str):
         inner = block_str[1:-1].strip()
         params = []
@@ -236,8 +252,6 @@ class Parser:
         if expr_str.startswith("[") and expr_str.endswith("]"):
             return self.parse_inline_block(expr_str)
         expr_str = self.strip_parentheses(expr_str)
-        if expr_str.startswith("'") and not expr_str.endswith("'"):
-            sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if expr_str and expr_str[0] in "+-" and not re.fullmatch(r"[+-]\d+", expr_str):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if re.fullmatch(r"[+-]?\d+", expr_str):
@@ -257,7 +271,9 @@ class Parser:
                      .replace('"', "&quot;"))
             return {"type": "literal", "class": "String", "value": value}
         tokens = self.tokenize(expr_str)
-        # Detect any colon as a standalone token (indicating unwanted whitespace)
+        for t in tokens:
+            if t.startswith("'") and not t.endswith("'"):
+                sys.exit(ErrorType.LEX_ERR_INPUT.value)
         if ":" in tokens:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         if len(tokens) == 0:
@@ -281,13 +297,11 @@ class Parser:
                 return {"type": "var", "name": token}
         if len(tokens) == 2:
             if tokens[1].strip().endswith(":"):
-                sys.exit(ErrorType.SYN_ERR_INPUT.value)  # e.g. "5 timesRepeat:" -> error
+                sys.exit(ErrorType.SYN_ERR_INPUT.value)
             receiver = self.parse_expr(tokens[0])
             selector = tokens[1].strip()
-            # Reject a selector that is not a valid identifier
             if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", selector):
                 sys.exit(ErrorType.SYN_ERR_INPUT.value)
-            # Reject reserved selectors.
             if selector in {"class", "self", "super", "nil", "true", "false"}:
                 sys.exit(ErrorType.SYN_ERR_INPUT.value)
             return {"type": "send", "selector": selector, "expr": receiver, "args": []}
@@ -301,7 +315,6 @@ class Parser:
                 token_sel = tokens[i].strip()
                 if not token_sel.endswith(":"):
                     sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                # Check each selector token exactly.
                 if not re.fullmatch(r"[A-Za-z0-9]+:$", token_sel):
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 selector_parts.append(token_sel)
@@ -309,20 +322,17 @@ class Parser:
                     arg_node = self.parse_expr(tokens[i + 1])
                     args.append({"order": len(args) + 1, "expr": arg_node})
             selector = "".join(selector_parts)
-            # Reject reserved concatenated selectors.
             if selector in {"class", "self", "super", "nil", "true", "false"}:
                 sys.exit(ErrorType.SYN_ERR_INPUT.value)
             return {"type": "send", "selector": selector, "expr": receiver, "args": args}
         sys.exit(ErrorType.LEX_ERR_INPUT.value)
 
-    # Funkcia parse_class_header() parsuje hlavicku triedy a inicializuje current_class.
     def parse_class_header(self, stripped):
         m = self.class_header_re.match(stripped)
         if not m:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         cls_name = m.group(1)
         parent = m.group(2) if m.group(2) else ""
-        # Overime, ci nazov triedy zacina velkym pismenom.
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", cls_name):
             sys.exit(ErrorType.LEX_ERR_INPUT.value)
         remainder = m.group(3).strip()
@@ -330,48 +340,63 @@ class Parser:
         if remainder:
             self.lines.insert(self.index, remainder)
 
-    # Funkcia parse_method_header() parsuje hlavicku metody a vracia dvojicu (selector, description).
     def parse_method_header(self, stripped):
         mm = self.method_header_re.match(stripped)
         if not mm:
             return None
         selector = mm.group(1)
-        # Check if the method name is a reserved identifier.
         if selector in {"class", "self", "super", "nil", "true", "false"}:
             sys.exit(ErrorType.SYN_ERR_INPUT.value)
         desc = mm.group(2) if mm.group(2) else ""
         return (selector, desc)
 
-
-    # Funkcia parse_block_instructions() parsuje instrukcie v tele bloku.
-    # Pred spracovanim kazdeho riadku kontroluje, ci ma parny pocet jednoduchych uvodzoviek.
+    # parse_block_instructions: join block lines (preserving newlines), remove comments,
+    # then split into top-level instructions (splitting on '.' at bracket level 0).
     def parse_block_instructions(self, lines_in_block):
+        all_text = "\n".join(lines_in_block)
+        all_text = self.remove_comments_multiline(all_text)
         instructions = []
+        current = ""
+        bracket_depth = 0
+        in_single_quote = False
+        escape = False
+        for ch in all_text:
+            current += ch
+            if in_single_quote:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == "'":
+                    in_single_quote = False
+                continue
+            else:
+                if ch == "'":
+                    in_single_quote = True
+                    continue
+            if ch == '[':
+                bracket_depth += 1
+            elif ch == ']':
+                if bracket_depth > 0:
+                    bracket_depth -= 1
+            elif ch == '.' and bracket_depth == 0:
+                instr = current.strip()
+                if instr:
+                    instructions.append(instr)
+                current = ""
+        if current.strip():
+            instructions.append(current.strip())
+        parsed_instructions = []
         order = 1
         assign_re = re.compile(r"^\s*([a-z_][A-Za-z0-9_]*)\s*:=\s*(.+?)\.\s*$", re.DOTALL)
         integer_re = re.compile(r"^[+-]?\d+$")
-        combined_lines = []
-        current_line = ""
-        for line in lines_in_block:
-            if (line.count("'") - line.count("\\'")) not in (0, 2):
-                sys.exit(ErrorType.LEX_ERR_INPUT.value)
-            if current_line:
-                current_line += " " + line.strip()
-            else:
-                current_line = line.strip()
-            if current_line.endswith("."):
-                combined_lines.append(current_line)
-                current_line = ""
-        if current_line:
-            combined_lines.append(current_line)
-        for line in combined_lines:
-            m = assign_re.match(line.strip())
+        for instr in instructions:
+            m = assign_re.match(instr)
             if not m:
                 sys.exit(ErrorType.SYN_ERR_INPUT.value)
             var_name = m.group(1)
             if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", var_name):
                 sys.exit(ErrorType.LEX_ERR_INPUT.value)
-            # Check for reserved identifiers.
             if var_name in {"self", "super", "true", "false", "nil", "class"}:
                 sys.exit(ErrorType.SYN_ERR_INPUT.value)
             expr_str = m.group(2).strip()
@@ -384,12 +409,12 @@ class Parser:
                         if token.startswith(":"):
                             params.append(token[1:])
                         else:
-                            sys.exit(ErrorType.LEX_ERR_INPUT.value)
+                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 instr_str = clean_expr[clean_expr.index("|") + 1:-1].strip()
                 if instr_str and not instr_str.endswith("."):
                     instr_str += "."
-                raw_instr = [s.strip() + "." for s in instr_str.split(".") if s.strip()]
-                instructions.append({
+                inner_instructions = self.parse_block_instructions([instr_str])
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
@@ -397,39 +422,39 @@ class Parser:
                         "type": "block",
                         "arity": len(params),
                         "parameters": params,
-                        "instructions": self.parse_block_instructions(raw_instr)
+                        "instructions": inner_instructions
                     }
                 })
             elif clean_expr.startswith("[") and clean_expr.endswith("]"):
-                instructions.append({
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "block", "arity": 0, "parameters": [], "instructions": []}
                 })
             elif integer_re.fullmatch(clean_expr):
-                instructions.append({
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "Integer", "value": clean_expr}
                 })
             elif clean_expr == "nil":
-                instructions.append({
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "Nil", "value": "nil"}
                 })
             elif clean_expr == "true":
-                instructions.append({
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
                     "expr": {"type": "literal", "class": "True", "value": "true"}
                 })
             elif clean_expr == "false":
-                instructions.append({
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
@@ -439,7 +464,7 @@ class Parser:
                 value = clean_expr[1:-1]
                 validate_string_literal(value)
                 value = value.replace("\\'", "\\&apos;")
-                instructions.append({
+                parsed_instructions.append({
                     "type": "assign",
                     "order": order,
                     "var": var_name,
@@ -449,14 +474,29 @@ class Parser:
                 node = self.parse_expr(clean_expr)
                 if node is None:
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
-                instructions.append({"type": "assign", "order": order, "var": var_name, "expr": node})
+                parsed_instructions.append({
+                    "type": "assign",
+                    "order": order,
+                    "var": var_name,
+                    "expr": node
+                })
             order += 1
-        return instructions
+        return parsed_instructions
 
-    # Funkcia store_method() ulozi aktualnu metodu do current_class a resetuje pomocne premenne.
+    # Modified store_method():
+    # If the current method is run in Main and the first raw block line is a double-quoted comment,
+    # extract its content as the program description and remove it from the block.
     def store_method(self):
         if not self.current_method:
             return
+        if (self.current_class["name"] == "Main" and
+            self.current_method["selector"] == "run" and
+            self.block_body_lines):
+            first_line = self.block_body_lines[0].strip()
+            if first_line.startswith('"') and first_line.endswith('"'):
+                self.program_description = self.transform_description(first_line[1:-1])
+                # Remove the description line from the block.
+                self.block_body_lines.pop(0)
         instructions = self.parse_block_instructions(self.block_body_lines)
         block = {"arity": len(self.block_params), "parameters": self.block_params, "instructions": instructions}
         self.current_method["block"] = block
@@ -510,7 +550,6 @@ class Parser:
                                 continue
                             sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 if not self.in_block:
-                    # --- Modified block literal processing in parse_main ---
                     if "[" in stripped and "]" in stripped:
                         idx_open = stripped.find("[")
                         idx_close = stripped.find("]")
@@ -575,24 +614,10 @@ class Parser:
                     if stripped == "]":
                         self.store_method()
                     else:
-                        no_comm = self.remove_comments(stripped)
-                        if no_comm.lstrip().startswith("[") and "|" in no_comm and not self.block_params:
-                            left = no_comm[1:no_comm.index("|")].strip()
-                            if left:
-                                for t in left.split():
-                                    if t.startswith(":"):
-                                        param = t[1:]
-                                        if param in {"class", "self", "super", "nil", "true", "false"}:
-                                            sys.exit(ErrorType.SYN_ERR_INPUT.value)
-                                        self.block_params.append(param)
-                            right = no_comm[no_comm.index("|") + 1:].strip()
-                            if right:
-                                self.block_body_lines.append(right)
-                        else:
-                            if no_comm.strip():
-                                self.block_body_lines.append(no_comm)
+                        # Instead of removing comments per-line inside a block,
+                        # simply accumulate the raw line.
+                        self.block_body_lines.append(stripped)
 
-    # Add this method to the Parser class.
     def check_main(self):
         main_found = False
         run_found = False
@@ -606,6 +631,8 @@ class Parser:
                 break
         if not main_found or not run_found:
             sys.exit(ErrorType.SEM_IN_MAIN.value)
+
+
 
 
 

@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+Implementace k 1. úloze do IPP 2024/2025
+Jméno a příjmení: Martin Kandera
+Login: xkande00
+"""
 import sys
 import re
 from enum import Enum
@@ -330,7 +335,6 @@ class Parser:
                 if token[0] not in "abcdefghijklmnopqrstuvwxyz_":
                     sys.exit(ErrorType.SYN_ERR_INPUT.value)
                 if not re.fullmatch(r"[a-z_][A-Za-z0-9]*", token):
-                    print("Problem token (variable):", token, file=sys.stderr)
                     sys.exit(ErrorType.LEX_ERR_INPUT.value)
                 return {"type": "var", "name": token}
         # Parsovanie pre vyraz so dvoma tokenmi (jednoduchy send)
